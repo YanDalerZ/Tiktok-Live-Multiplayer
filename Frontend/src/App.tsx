@@ -74,7 +74,6 @@ export default function App() {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      // Prevent state updates if component unmounted during socket handshakes
       if (!isMounted) return;
       setStatus('INSERT COIN TO PLAY');
       ws.send(JSON.stringify({ type: 'request_stream' }));
@@ -90,11 +89,14 @@ export default function App() {
           setQueueList(message.queue);
           setTimeLeft(message.timeRemaining);
         } else if (message.type === 'offer') {
+          // Optimized for lowest possible connection latency
           const pc = new RTCPeerConnection({
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' }
-            ]
+            ],
+            iceTransportPolicy: 'all',
+            bundlePolicy: 'max-bundle'
           });
           pcRef.current = pc;
 
@@ -161,7 +163,6 @@ export default function App() {
       isMounted = false;
       pcRef.current?.close();
 
-      // Only close if the socket is actively open or connecting
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
       }
@@ -185,7 +186,7 @@ export default function App() {
   };
 
   const handleTouchStart = (code: string) => (e: React.TouchEvent | React.MouseEvent) => {
-    e.preventDefault(); // Prevents touch scrolling/zooming while tapping buttons
+    e.preventDefault();
     if (!isCurrentPlayer) return;
     if (!pressedKeys.current.has(code)) {
       pressedKeys.current.add(code);
@@ -208,7 +209,6 @@ export default function App() {
 
   return (
     <div style={styles.container}>
-      {/* Cabinet Header */}
       <div style={styles.marquee}>
         <h1 style={styles.marqueeText}>TEKKEN 7 ARCADE</h1>
         <div style={styles.statusDisplay}>{status}</div>
@@ -216,19 +216,24 @@ export default function App() {
 
       {errorMessage && <div style={styles.errorBox}>{errorMessage}</div>}
 
-      {/* Main Screen Frame */}
       <div style={styles.screenFrame}>
         <div style={styles.timerBar}>
           <span>TIME REMAINING: <strong>{formatTime(timeLeft)}</strong></span>
           <span>P1: {activePlayerInfo ? activePlayerInfo.playerName : 'WAITING FOR CHALLENGER'}</span>
         </div>
 
+        {/* Video element highly optimized for live low-latency playout */}
         <video
           ref={videoRef}
           autoPlay
           playsInline
           muted
+          disablePictureInPicture
           style={styles.videoStream}
+          onLoadedMetadata={(e) => {
+            const video = e.currentTarget;
+            video.play();
+          }}
         />
 
         {!isCurrentPlayer && (
@@ -240,7 +245,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Queue & Join Controls */}
       {!inQueue ? (
         <div style={styles.insertCoinSection}>
           <input
@@ -267,10 +271,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Arcade Physical Controls Section */}
       <div style={styles.controlDeck}>
         <div style={styles.controlDeckTop}>
-          {/* D-PAD / Movement Controls */}
           <div style={styles.dpadContainer}>
             <div style={styles.dpadRow}>
               <button
@@ -318,7 +320,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Action / Fight Buttons Layout */}
           <div style={styles.actionButtonsContainer}>
             <div style={styles.actionRow}>
               <button
@@ -407,7 +408,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* System / Utility Buttons Row */}
         <div style={styles.utilityRow}>
           <button
             onTouchStart={handleTouchStart('KeyV')}
@@ -452,7 +452,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Queue Listing Display (Always Visible) */}
       <div style={styles.queueContainer}>
         <h3 style={{ margin: '0 0 10px 0', color: '#ffcc00' }}>UPCOMING CHALLENGERS ({queueList.length})</h3>
         {queueList.length === 0 ? (

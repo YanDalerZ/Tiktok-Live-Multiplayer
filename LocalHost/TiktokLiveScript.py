@@ -231,17 +231,21 @@ def start_window_capture(hwnd):
                     else:
                         img = np.array(frame)
 
+                    # Fast array slicing instead of slow cv2.cvtColor for lower CPU latency
                     if img.shape[2] == 4:
-                        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+                        rgb_img = img[:, :, [2, 1, 0]]
                     elif img.shape[2] == 3:
-                        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                        rgb_img = img[:, :, ::-1]
                     else:
                         rgb_img = img
 
+                    # Downscale frame to 720p to dramatically speed up CPU encoding
+                    rgb_img = cv2.resize(rgb_img, (1280, 720), interpolation=cv2.INTER_NEAREST)
+
                     with latest_frame_lock:
                         latest_frame = rgb_img
-                except Exception as frame_err:
-                    pass # Ignore sparse frame conversion errors
+                except Exception:
+                    pass
 
             @capture.event
             def on_closed():
@@ -262,23 +266,19 @@ class ScreenCaptureTrack(VideoStreamTrack):
     async def recv(self):
         pts, time_base = await self.next_timestamp()
 
-        now = time.time()
-        elapsed = now - self._last_frame_time
-        if elapsed < FRAME_INTERVAL:
-            await asyncio.sleep(FRAME_INTERVAL - elapsed)
-        self._last_frame_time = time.time()
-
+        # Direct pointer reference to avoid costly frame copies
         with latest_frame_lock:
-            frame_rgb = latest_frame.copy() if latest_frame is not None else None
+            frame_rgb = latest_frame
 
         if frame_rgb is None:
             frame_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
             cv2.putText(frame_rgb, "Select Game Window in Selector...", (280, 360),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
+        # Quick bitwise ensure dimensions are strictly even for H.264 encoder
         h, w, _ = frame_rgb.shape
-        if h % 2 != 0: h -= 1
-        if w % 2 != 0: w -= 1
+        h &= ~1
+        w &= ~1
         frame_rgb = frame_rgb[:h, :w]
 
         new_frame = VideoFrame.from_ndarray(frame_rgb, format="rgb24")
