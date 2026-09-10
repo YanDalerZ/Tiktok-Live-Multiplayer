@@ -1,5 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
+// Dynamically inject Tailwind CSS script into the document head
+if (typeof document !== 'undefined' && !document.getElementById('tailwind-cdn')) {
+  const script = document.createElement('script');
+  script.id = 'tailwind-cdn';
+  script.src = 'https://cdn.tailwindcss.com';
+  document.head.appendChild(script);
+}
+
 // Automatically points to secure wss:// protocol when hosted on Render HTTPS domain
 const getSignalingUrl = () => {
   if (typeof window !== 'undefined') {
@@ -216,91 +224,133 @@ export default function App() {
   };
 
   return (
-    <div style={styles.container}>
-      <div style={styles.marquee}>
-        <h1 style={styles.marqueeText}>TEKKEN 7 ARCADE</h1>
-        <div style={styles.statusDisplay}>{status}</div>
+    <div className="w-screen h-screen overflow-hidden bg-[#0a0a0c] text-[#00ffcc] font-mono flex flex-col items-center p-2 sm:p-4 select-none touch-none">
+      {/* Marquee Header */}
+      <div className="w-full max-w-4xl bg-gradient-to-b from-[#e60000] to-[#800000] border-2 sm:border-3 border-[#ffcc00] rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center shadow-[0_0_15px_#ff0000] shrink-0">
+        <h1 className="m-0 text-base sm:text-2xl font-black tracking-widest text-white drop-shadow-[2px_2px_0_#000]">
+          TEKKEN 7 ARCADE
+        </h1>
+        <div className="text-[10px] sm:text-xs text-[#ffcc00] font-bold mt-0.5 tracking-wider uppercase">
+          {status}
+        </div>
       </div>
 
-      {errorMessage && <div style={styles.errorBox}>{errorMessage}</div>}
+      {/* Error Banner */}
+      {errorMessage && (
+        <div className="w-full max-w-4xl bg-[#ff0055] text-white text-xs px-3 py-1 rounded my-1 text-center font-bold shrink-0">
+          {errorMessage}
+        </div>
+      )}
 
-      <div style={styles.screenFrame}>
-        <div style={styles.timerBar}>
-          <span>TIME REMAINING: <strong>{formatTime(timeLeft)}</strong></span>
-          <span>P1: {activePlayerInfo ? activePlayerInfo.playerName : 'WAITING FOR CHALLENGER'}</span>
+      {/* Main Cabinet Display & Queue View */}
+      <div className="w-full max-w-4xl flex-1 grid grid-cols-1 md:grid-cols-4 gap-2 my-1.5 min-h-0 overflow-hidden">
+        {/* Stream Frame */}
+        <div className="md:col-span-3 relative bg-black border-2 sm:border-4 border-[#333] rounded-lg sm:rounded-xl overflow-hidden flex flex-col justify-between shadow-[0_0_20px_rgba(0,255,204,0.15)] h-full">
+          <div className="flex justify-between items-center px-3 py-1 bg-[#111] border-b border-[#222] text-[10px] sm:text-xs text-[#00ffcc] shrink-0 z-10">
+            <span>TIME: <strong className="text-white">{formatTime(timeLeft)}</strong></span>
+            <span className="truncate max-w-[50%]">P1: <strong className="text-white">{activePlayerInfo ? activePlayerInfo.playerName : 'WAITING'}</strong></span>
+          </div>
+
+          <div className="relative flex-1 bg-[#050505] flex items-center justify-center overflow-hidden">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              disablePictureInPicture
+              className="w-full h-full object-contain"
+              onLoadedMetadata={(e) => {
+                const video = e.currentTarget;
+                video.play();
+              }}
+            />
+
+            {!isCurrentPlayer && (
+              <div className="absolute bottom-2 right-2 bg-black/80 px-2 py-1 rounded border border-[#ffcc00] text-[#ffcc00] text-[10px] sm:text-xs">
+                <p className="m-0 font-bold uppercase">
+                  {activePlayerInfo ? `${activePlayerInfo.playerName} IS PLAYING` : 'CABINET IS IDLE'}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
 
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          disablePictureInPicture
-          style={styles.videoStream}
-          onLoadedMetadata={(e) => {
-            const video = e.currentTarget;
-            video.play();
-          }}
-        />
+        {/* Upcoming Challengers Sidebar */}
+        <div className="hidden md:flex md:col-span-1 bg-[#111] border-2 border-[#222] rounded-lg sm:rounded-xl p-2.5 flex-col overflow-hidden">
+          <h3 className="m-0 mb-2 text-[#ffcc00] text-xs font-bold border-b border-[#222] pb-1 shrink-0">
+            CHALLENGERS ({queueList.length})
+          </h3>
+          <div className="flex-1 overflow-y-auto text-xs text-left">
+            {queueList.length === 0 ? (
+              <div className="text-[#888] text-[11px] italic">No challengers in line.</div>
+            ) : (
+              <ol className="m-0 pl-4 space-y-1">
+                {queueList.map((player, idx) => (
+                  <li key={player.id} className="text-white truncate">
+                    {player.playerName} {idx === 0 ? <span className="text-[#00ffcc] font-bold">(NEXT)</span> : ''}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </div>
+      </div>
 
-        {!isCurrentPlayer && (
-          <div style={styles.overlay}>
-            <p style={{ margin: 0, fontWeight: 'bold' }}>
-              {activePlayerInfo ? `${activePlayerInfo.playerName} IS PLAYING` : 'CABINET IS IDLE'}
-            </p>
+      {/* Coin/Queue Controls */}
+      <div className="w-full max-w-4xl shrink-0 my-1">
+        {!inQueue ? (
+          <div className="flex gap-2 justify-center items-center">
+            <input
+              type="text"
+              placeholder="ENTER CHALLENGER NAME"
+              value={playerName}
+              onChange={(e) => setPlayerName(e.target.value)}
+              className="px-3 py-1.5 text-xs bg-[#1a1a1a] text-[#00ffcc] border-2 border-[#00ffcc] rounded focus:outline-none placeholder-[#00ffcc]/50 uppercase w-48 sm:w-64"
+            />
+            <button
+              onClick={joinQueue}
+              className="px-4 py-1.5 text-xs font-bold bg-[#ffcc00] text-black border-2 border-white rounded cursor-pointer shadow-[0_3px_0_#b38f00] active:translate-y-0.5 active:shadow-none uppercase"
+            >
+              INSERT COIN
+            </button>
+          </div>
+        ) : (
+          <div className="p-1.5 border border-dashed border-[#00ffcc] rounded text-center text-xs bg-[#111]/80">
+            {isCurrentPlayer ? (
+              <span className="text-[#00ff00] font-bold animate-pulse">YOU ARE ON THE STAGE!</span>
+            ) : (
+              <span>
+                QUEUED! NEXT IN LINE. POSITION:{' '}
+                <strong className="text-white">{queueList.findIndex((p) => p.playerName === playerName) + 1}</strong>
+              </span>
+            )}
           </div>
         )}
       </div>
 
-      {!inQueue ? (
-        <div style={styles.insertCoinSection}>
-          <input
-            type="text"
-            placeholder="ENTER CHALLENGER NAME"
-            value={playerName}
-            onChange={(e) => setPlayerName(e.target.value)}
-            style={styles.inputField}
-          />
-          <button onClick={joinQueue} style={styles.coinButton}>
-            INSERT COIN / JOIN QUEUE
-          </button>
-        </div>
-      ) : (
-        <div style={styles.queueStatusBox}>
-          {isCurrentPlayer ? (
-            <span style={{ color: '#00ff00', fontWeight: 'bold' }}>YOU ARE ON THE STAGE!</span>
-          ) : (
-            <span>
-              QUEUED! NEXT IN LINE. QUEUE POSITION: {' '}
-              <strong>{queueList.findIndex((p) => p.playerName === playerName) + 1}</strong>
-            </span>
-          )}
-        </div>
-      )}
-
-      <div style={styles.controlDeck}>
-        <div style={styles.controlDeckTop}>
-          <div style={styles.dpadContainer}>
-            <div style={styles.dpadRow}>
-              <button
-                onTouchStart={handleTouchStart('KeyW')}
-                onTouchEnd={handleTouchEnd('KeyW')}
-                onMouseDown={handleTouchStart('KeyW')}
-                onMouseUp={handleTouchEnd('KeyW')}
-                onMouseLeave={handleTouchEnd('KeyW')}
-                style={{ ...styles.arcadeBtn, ...styles.dpadBtn }}
-              >
-                W
-              </button>
-            </div>
-            <div style={styles.dpadRow}>
+      {/* Control Deck */}
+      <div className="w-full max-w-4xl bg-[#18181c] border-2 sm:border-3 border-[#333] rounded-xl sm:rounded-2xl p-2 sm:p-3 flex flex-col gap-2 shrink-0 shadow-2xl">
+        <div className="flex flex-row justify-between items-center w-full px-2 sm:px-6">
+          {/* D-Pad Controls */}
+          <div className="flex flex-col items-center gap-1">
+            <button
+              onTouchStart={handleTouchStart('KeyW')}
+              onTouchEnd={handleTouchEnd('KeyW')}
+              onMouseDown={handleTouchStart('KeyW')}
+              onMouseUp={handleTouchEnd('KeyW')}
+              onMouseLeave={handleTouchEnd('KeyW')}
+              className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555]"
+            >
+              W
+            </button>
+            <div className="flex gap-1">
               <button
                 onTouchStart={handleTouchStart('KeyA')}
                 onTouchEnd={handleTouchEnd('KeyA')}
                 onMouseDown={handleTouchStart('KeyA')}
                 onMouseUp={handleTouchEnd('KeyA')}
                 onMouseLeave={handleTouchEnd('KeyA')}
-                style={{ ...styles.arcadeBtn, ...styles.dpadBtn }}
+                className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555]"
               >
                 A
               </button>
@@ -310,7 +360,7 @@ export default function App() {
                 onMouseDown={handleTouchStart('KeyS')}
                 onMouseUp={handleTouchEnd('KeyS')}
                 onMouseLeave={handleTouchEnd('KeyS')}
-                style={{ ...styles.arcadeBtn, ...styles.dpadBtn }}
+                className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555]"
               >
                 S
               </button>
@@ -320,22 +370,23 @@ export default function App() {
                 onMouseDown={handleTouchStart('KeyD')}
                 onMouseUp={handleTouchEnd('KeyD')}
                 onMouseLeave={handleTouchEnd('KeyD')}
-                style={{ ...styles.arcadeBtn, ...styles.dpadBtn }}
+                className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555]"
               >
                 D
               </button>
             </div>
           </div>
 
-          <div style={styles.actionButtonsContainer}>
-            <div style={styles.actionRow}>
+          {/* Action Buttons Matrix */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex gap-1.5 sm:gap-2">
               <button
                 onTouchStart={handleTouchStart('KeyU')}
                 onTouchEnd={handleTouchEnd('KeyU')}
                 onMouseDown={handleTouchStart('KeyU')}
                 onMouseUp={handleTouchEnd('KeyU')}
                 onMouseLeave={handleTouchEnd('KeyU')}
-                style={{ ...styles.arcadeBtn, ...styles.btnRed }}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#e60000] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
               >
                 U
               </button>
@@ -345,7 +396,7 @@ export default function App() {
                 onMouseDown={handleTouchStart('KeyI')}
                 onMouseUp={handleTouchEnd('KeyI')}
                 onMouseLeave={handleTouchEnd('KeyI')}
-                style={{ ...styles.arcadeBtn, ...styles.btnYellow }}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-black bg-[#e6b800] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
               >
                 I
               </button>
@@ -355,7 +406,7 @@ export default function App() {
                 onMouseDown={handleTouchStart('KeyO')}
                 onMouseUp={handleTouchEnd('KeyO')}
                 onMouseLeave={handleTouchEnd('KeyO')}
-                style={{ ...styles.arcadeBtn, ...styles.btnBlue }}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#0066cc] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
               >
                 O
               </button>
@@ -365,19 +416,19 @@ export default function App() {
                 onMouseDown={handleTouchStart('KeyP')}
                 onMouseUp={handleTouchEnd('KeyP')}
                 onMouseLeave={handleTouchEnd('KeyP')}
-                style={{ ...styles.arcadeBtn, ...styles.btnPurple }}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#6600cc] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
               >
                 P
               </button>
             </div>
-            <div style={styles.actionRow}>
+            <div className="flex gap-1.5 sm:gap-2">
               <button
                 onTouchStart={handleTouchStart('KeyJ')}
                 onTouchEnd={handleTouchEnd('KeyJ')}
                 onMouseDown={handleTouchStart('KeyJ')}
                 onMouseUp={handleTouchEnd('KeyJ')}
                 onMouseLeave={handleTouchEnd('KeyJ')}
-                style={{ ...styles.arcadeBtn, ...styles.btnGreen }}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#009933] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
               >
                 J
               </button>
@@ -387,7 +438,7 @@ export default function App() {
                 onMouseDown={handleTouchStart('KeyK')}
                 onMouseUp={handleTouchEnd('KeyK')}
                 onMouseLeave={handleTouchEnd('KeyK')}
-                style={{ ...styles.arcadeBtn, ...styles.btnPink }}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#cc0088] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
               >
                 K
               </button>
@@ -397,7 +448,7 @@ export default function App() {
                 onMouseDown={handleTouchStart('KeyL')}
                 onMouseUp={handleTouchEnd('KeyL')}
                 onMouseLeave={handleTouchEnd('KeyL')}
-                style={{ ...styles.arcadeBtn, ...styles.btnOrange }}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#ff6600] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
               >
                 L
               </button>
@@ -407,7 +458,7 @@ export default function App() {
                 onMouseDown={handleTouchStart('Semicolon')}
                 onMouseUp={handleTouchEnd('Semicolon')}
                 onMouseLeave={handleTouchEnd('Semicolon')}
-                style={{ ...styles.arcadeBtn, ...styles.btnTeal }}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#009999] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
               >
                 ;
               </button>
@@ -415,14 +466,15 @@ export default function App() {
           </div>
         </div>
 
-        <div style={styles.utilityRow}>
+        {/* Utility Row */}
+        <div className="flex justify-center flex-wrap gap-2 pt-1 border-t border-dashed border-[#333]">
           <button
             onTouchStart={handleTouchStart('KeyV')}
             onTouchEnd={handleTouchEnd('KeyV')}
             onMouseDown={handleTouchStart('KeyV')}
             onMouseUp={handleTouchEnd('KeyV')}
             onMouseLeave={handleTouchEnd('KeyV')}
-            style={styles.utilityBtn}
+            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none"
           >
             V (VIEW)
           </button>
@@ -432,7 +484,7 @@ export default function App() {
             onMouseDown={handleTouchStart('KeyB')}
             onMouseUp={handleTouchEnd('KeyB')}
             onMouseLeave={handleTouchEnd('KeyB')}
-            style={styles.utilityBtn}
+            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none"
           >
             B (MENU)
           </button>
@@ -442,7 +494,7 @@ export default function App() {
             onMouseDown={handleTouchStart('KeyC')}
             onMouseUp={handleTouchEnd('KeyC')}
             onMouseLeave={handleTouchEnd('KeyC')}
-            style={styles.utilityBtn}
+            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none"
           >
             C (L3)
           </button>
@@ -452,248 +504,12 @@ export default function App() {
             onMouseDown={handleTouchStart('KeyN')}
             onMouseUp={handleTouchEnd('KeyN')}
             onMouseLeave={handleTouchEnd('KeyN')}
-            style={styles.utilityBtn}
+            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none"
           >
             N (R3)
           </button>
         </div>
       </div>
-
-      <div style={styles.queueContainer}>
-        <h3 style={{ margin: '0 0 10px 0', color: '#ffcc00' }}>UPCOMING CHALLENGERS ({queueList.length})</h3>
-        {queueList.length === 0 ? (
-          <div style={{ color: '#888' }}>No challengers in line. Insert coin to play!</div>
-        ) : (
-          <ol style={{ margin: 0, paddingLeft: '20px', textAlign: 'left' }}>
-            {queueList.map((player, idx) => (
-              <li key={player.id} style={{ padding: '4px 0', color: '#fff' }}>
-                {player.playerName} {idx === 0 ? '(NEXT)' : ''}
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    padding: '15px',
-    fontFamily: '"Courier New", Courier, monospace',
-    textAlign: 'center',
-    backgroundColor: '#0a0a0c',
-    color: '#00ffcc',
-    minHeight: '100vh',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    boxSizing: 'border-box',
-  },
-  marquee: {
-    background: 'linear-gradient(180deg, #e60000 0%, #800000 100%)',
-    border: '3px solid #ffcc00',
-    borderRadius: '12px',
-    padding: '10px 20px',
-    width: '100%',
-    maxWidth: '800px',
-    boxShadow: '0 0 15px #ff0000',
-    marginBottom: '15px',
-  },
-  marqueeText: {
-    margin: 0,
-    fontSize: '28px',
-    letterSpacing: '3px',
-    color: '#fff',
-    textShadow: '2px 2px #000',
-  },
-  statusDisplay: {
-    fontSize: '14px',
-    color: '#ffcc00',
-    marginTop: '5px',
-    fontWeight: 'bold',
-  },
-  errorBox: {
-    backgroundColor: '#ff0055',
-    color: '#fff',
-    padding: '8px 16px',
-    borderRadius: '6px',
-    marginBottom: '10px',
-    fontWeight: 'bold',
-  },
-  screenFrame: {
-    position: 'relative',
-    width: '100%',
-    maxWidth: '800px',
-    backgroundColor: '#000',
-    border: '4px solid #333',
-    borderRadius: '12px',
-    overflow: 'hidden',
-    boxShadow: '0 0 20px rgba(0, 255, 204, 0.2)',
-  },
-  timerBar: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    padding: '8px 15px',
-    backgroundColor: '#111',
-    borderBottom: '2px solid #222',
-    fontSize: '13px',
-    color: '#00ffcc',
-  },
-  videoStream: {
-    width: '100%',
-    aspectRatio: '16/9',
-    backgroundColor: '#050505',
-    display: 'block',
-  },
-  overlay: {
-    position: 'absolute',
-    bottom: '10px',
-    right: '10px',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    padding: '6px 12px',
-    borderRadius: '4px',
-    border: '1px solid #ffcc00',
-    color: '#ffcc00',
-    fontSize: '12px',
-  },
-  insertCoinSection: {
-    marginTop: '15px',
-    display: 'flex',
-    gap: '10px',
-    justifyContent: 'center',
-    width: '100%',
-    maxWidth: '800px',
-    flexWrap: 'wrap',
-  },
-  inputField: {
-    padding: '10px 14px',
-    fontSize: '14px',
-    fontFamily: 'inherit',
-    backgroundColor: '#1a1a1a',
-    color: '#00ffcc',
-    border: '2px solid #00ffcc',
-    borderRadius: '6px',
-    outline: 'none',
-  },
-  coinButton: {
-    padding: '10px 20px',
-    fontSize: '14px',
-    fontWeight: 'bold',
-    fontFamily: 'inherit',
-    backgroundColor: '#ffcc00',
-    color: '#000',
-    border: '2px solid #fff',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    boxShadow: '0 4px 0 #b38f00',
-  },
-  queueStatusBox: {
-    marginTop: '15px',
-    padding: '10px',
-    border: '1px dashed #00ffcc',
-    borderRadius: '6px',
-    width: '100%',
-    maxWidth: '800px',
-    boxSizing: 'border-box',
-  },
-  controlDeck: {
-    marginTop: '20px',
-    width: '100%',
-    maxWidth: '800px',
-    backgroundColor: '#18181c',
-    border: '3px solid #333',
-    borderRadius: '16px',
-    padding: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '20px',
-    boxSizing: 'border-box',
-    touchAction: 'none'
-  },
-  controlDeckTop: {
-    display: 'flex',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    width: '100%'
-  },
-  dpadContainer: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '5px'
-  },
-  dpadRow: {
-    display: 'flex',
-    gap: '5px',
-  },
-  actionButtonsContainer: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-  },
-  actionRow: {
-    display: 'flex',
-    gap: '10px',
-  },
-  utilityRow: {
-    display: 'flex',
-    justifyContent: 'center',
-    flexWrap: 'wrap',
-    gap: '15px',
-    paddingTop: '15px',
-    borderTop: '2px dashed #333'
-  },
-  arcadeBtn: {
-    width: '55px',
-    height: '55px',
-    borderRadius: '50%',
-    border: '3px solid #fff',
-    fontWeight: 'bold',
-    fontSize: '18px',
-    cursor: 'pointer',
-    userSelect: 'none',
-    touchAction: 'none',
-    boxShadow: '0 5px 0 rgba(0,0,0,0.5)',
-    color: '#fff',
-    textShadow: '1px 1px #000',
-  },
-  dpadBtn: {
-    backgroundColor: '#333',
-    borderRadius: '8px',
-    width: '50px',
-    height: '50px',
-  },
-  utilityBtn: {
-    padding: '8px 12px',
-    backgroundColor: '#2b2b2b',
-    color: '#ccc',
-    border: '2px solid #555',
-    borderRadius: '15px',
-    fontSize: '12px',
-    fontWeight: 'bold',
-    cursor: 'pointer',
-    userSelect: 'none',
-    touchAction: 'none',
-    boxShadow: '0 3px 0 #111',
-  },
-  btnRed: { backgroundColor: '#e60000' },
-  btnYellow: { backgroundColor: '#e6b800', color: '#000' },
-  btnBlue: { backgroundColor: '#0066cc' },
-  btnPurple: { backgroundColor: '#6600cc' },
-  btnGreen: { backgroundColor: '#009933' },
-  btnPink: { backgroundColor: '#cc0088' },
-  btnOrange: { backgroundColor: '#ff6600' },
-  btnTeal: { backgroundColor: '#009999' },
-  queueContainer: {
-    marginTop: '20px',
-    width: '100%',
-    maxWidth: '800px',
-    backgroundColor: '#111',
-    border: '2px solid #222',
-    borderRadius: '8px',
-    padding: '15px',
-    boxSizing: 'border-box',
-  },
-};

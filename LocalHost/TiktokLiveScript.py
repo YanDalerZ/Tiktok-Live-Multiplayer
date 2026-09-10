@@ -17,7 +17,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, Vi
 from av import VideoFrame
 
 # Set your deployed Render signaling URL (use wss:// for SSL encrypted production sockets)
-SIGNALING_SERVER_URL = "wss://your-render-app-name.onrender.com"
+SIGNALING_SERVER_URL = "wss://tiktok-live-multiplayer.onrender.com/"
 TARGET_FPS = 60
 FRAME_INTERVAL = 1.0 / TARGET_FPS
 
