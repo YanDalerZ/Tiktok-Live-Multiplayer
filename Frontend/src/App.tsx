@@ -224,7 +224,7 @@ export default function App() {
   };
 
   return (
-    <div className="w-screen h-screen overflow-hidden bg-[#0a0a0c] text-[#00ffcc] font-mono flex flex-col items-center p-2 sm:p-4 select-none touch-none">
+    <div className="min-h-screen w-full bg-[#0a0a0c] text-[#00ffcc] font-mono flex flex-col items-center p-2 sm:p-4 overflow-y-auto">
       {/* Marquee Header */}
       <div className="w-full max-w-4xl bg-gradient-to-b from-[#e60000] to-[#800000] border-2 sm:border-3 border-[#ffcc00] rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center shadow-[0_0_15px_#ff0000] shrink-0">
         <h1 className="m-0 text-base sm:text-2xl font-black tracking-widest text-white drop-shadow-[2px_2px_0_#000]">
@@ -243,15 +243,15 @@ export default function App() {
       )}
 
       {/* Main Cabinet Display & Queue View */}
-      <div className="w-full max-w-4xl flex-1 grid grid-cols-1 md:grid-cols-4 gap-2 my-1.5 min-h-0 overflow-hidden">
+      <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-4 gap-2 my-1.5 min-h-[300px]">
         {/* Stream Frame */}
-        <div className="md:col-span-3 relative bg-black border-2 sm:border-4 border-[#333] rounded-lg sm:rounded-xl overflow-hidden flex flex-col justify-between shadow-[0_0_20px_rgba(0,255,204,0.15)] h-full">
+        <div className="md:col-span-3 relative bg-black border-2 sm:border-4 border-[#333] rounded-lg sm:rounded-xl overflow-hidden flex flex-col justify-between shadow-[0_0_20px_rgba(0,255,204,0.15)] min-h-[250px]">
           <div className="flex justify-between items-center px-3 py-1 bg-[#111] border-b border-[#222] text-[10px] sm:text-xs text-[#00ffcc] shrink-0 z-10">
             <span>TIME: <strong className="text-white">{formatTime(timeLeft)}</strong></span>
             <span className="truncate max-w-[50%]">P1: <strong className="text-white">{activePlayerInfo ? activePlayerInfo.playerName : 'WAITING'}</strong></span>
           </div>
 
-          <div className="relative flex-1 bg-[#050505] flex items-center justify-center overflow-hidden">
+          <div className="relative flex-1 bg-[#050505] flex items-center justify-center overflow-hidden min-h-[200px]">
             <video
               ref={videoRef}
               autoPlay
@@ -276,7 +276,7 @@ export default function App() {
         </div>
 
         {/* Upcoming Challengers Sidebar */}
-        <div className="hidden md:flex md:col-span-1 bg-[#111] border-2 border-[#222] rounded-lg sm:rounded-xl p-2.5 flex-col overflow-hidden">
+        <div className="hidden md:flex md:col-span-1 bg-[#111] border-2 border-[#222] rounded-lg sm:rounded-xl p-2.5 flex-col max-h-[400px]">
           <h3 className="m-0 mb-2 text-[#ffcc00] text-xs font-bold border-b border-[#222] pb-1 shrink-0">
             CHALLENGERS ({queueList.length})
           </h3>
@@ -329,11 +329,12 @@ export default function App() {
       </div>
 
       {/* Control Deck */}
-      <div className="w-full max-w-4xl bg-[#18181c] border-2 sm:border-3 border-[#333] rounded-xl sm:rounded-2xl p-2 sm:p-3 flex flex-col gap-2 shrink-0 shadow-2xl">
+      <div className="w-full max-w-4xl bg-[#18181c] border-2 sm:border-3 border-[#333] rounded-xl sm:rounded-2xl p-2 sm:p-3 flex flex-col gap-2 shrink-0 shadow-2xl my-2">
         <div className="flex flex-row justify-between items-center w-full px-2 sm:px-6">
           {/* D-Pad Controls */}
           <div className="flex flex-col items-center gap-1">
             <button
+              style={{ touchAction: 'manipulation' }}
               onTouchStart={handleTouchStart('KeyW')}
               onTouchEnd={handleTouchEnd('KeyW')}
               onMouseDown={handleTouchStart('KeyW')}
@@ -345,6 +346,7 @@ export default function App() {
             </button>
             <div className="flex gap-1">
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyA')}
                 onTouchEnd={handleTouchEnd('KeyA')}
                 onMouseDown={handleTouchStart('KeyA')}
@@ -355,6 +357,7 @@ export default function App() {
                 A
               </button>
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyS')}
                 onTouchEnd={handleTouchEnd('KeyS')}
                 onMouseDown={handleTouchStart('KeyS')}
@@ -365,6 +368,7 @@ export default function App() {
                 S
               </button>
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyD')}
                 onTouchEnd={handleTouchEnd('KeyD')}
                 onMouseDown={handleTouchStart('KeyD')}
@@ -381,6 +385,7 @@ export default function App() {
           <div className="flex flex-col gap-1.5">
             <div className="flex gap-1.5 sm:gap-2">
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyU')}
                 onTouchEnd={handleTouchEnd('KeyU')}
                 onMouseDown={handleTouchStart('KeyU')}
@@ -391,6 +396,7 @@ export default function App() {
                 U
               </button>
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyI')}
                 onTouchEnd={handleTouchEnd('KeyI')}
                 onMouseDown={handleTouchStart('KeyI')}
@@ -401,6 +407,7 @@ export default function App() {
                 I
               </button>
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyO')}
                 onTouchEnd={handleTouchEnd('KeyO')}
                 onMouseDown={handleTouchStart('KeyO')}
@@ -411,6 +418,7 @@ export default function App() {
                 O
               </button>
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyP')}
                 onTouchEnd={handleTouchEnd('KeyP')}
                 onMouseDown={handleTouchStart('KeyP')}
@@ -423,6 +431,7 @@ export default function App() {
             </div>
             <div className="flex gap-1.5 sm:gap-2">
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyJ')}
                 onTouchEnd={handleTouchEnd('KeyJ')}
                 onMouseDown={handleTouchStart('KeyJ')}
@@ -433,6 +442,7 @@ export default function App() {
                 J
               </button>
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyK')}
                 onTouchEnd={handleTouchEnd('KeyK')}
                 onMouseDown={handleTouchStart('KeyK')}
@@ -443,6 +453,7 @@ export default function App() {
                 K
               </button>
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('KeyL')}
                 onTouchEnd={handleTouchEnd('KeyL')}
                 onMouseDown={handleTouchStart('KeyL')}
@@ -453,6 +464,7 @@ export default function App() {
                 L
               </button>
               <button
+                style={{ touchAction: 'manipulation' }}
                 onTouchStart={handleTouchStart('Semicolon')}
                 onTouchEnd={handleTouchEnd('Semicolon')}
                 onMouseDown={handleTouchStart('Semicolon')}
@@ -469,6 +481,7 @@ export default function App() {
         {/* Utility Row */}
         <div className="flex justify-center flex-wrap gap-2 pt-1 border-t border-dashed border-[#333]">
           <button
+            style={{ touchAction: 'manipulation' }}
             onTouchStart={handleTouchStart('KeyV')}
             onTouchEnd={handleTouchEnd('KeyV')}
             onMouseDown={handleTouchStart('KeyV')}
@@ -479,6 +492,7 @@ export default function App() {
             V (VIEW)
           </button>
           <button
+            style={{ touchAction: 'manipulation' }}
             onTouchStart={handleTouchStart('KeyB')}
             onTouchEnd={handleTouchEnd('KeyB')}
             onMouseDown={handleTouchStart('KeyB')}
@@ -489,6 +503,7 @@ export default function App() {
             B (MENU)
           </button>
           <button
+            style={{ touchAction: 'manipulation' }}
             onTouchStart={handleTouchStart('KeyC')}
             onTouchEnd={handleTouchEnd('KeyC')}
             onMouseDown={handleTouchStart('KeyC')}
@@ -499,6 +514,7 @@ export default function App() {
             C (L3)
           </button>
           <button
+            style={{ touchAction: 'manipulation' }}
             onTouchStart={handleTouchStart('KeyN')}
             onTouchEnd={handleTouchEnd('KeyN')}
             onMouseDown={handleTouchStart('KeyN')}
