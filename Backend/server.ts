@@ -96,7 +96,7 @@ wss.on('close', () => clearInterval(interval));
 
 wss.on('connection', (ws: ExtendedWebSocket) => {
     ws.isAlive = true;
-    ws.id = Math.random().toString(36).substring(2, 9); // Assign a unique ID for WebRTC targeting
+    ws.id = Math.random().toString(36).substring(2, 9);
 
     ws.on('pong', () => {
         ws.isAlive = true;
@@ -118,7 +118,6 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
             }
 
             else if (data.type === 'request_stream') {
-                // Forward viewer connection to Host so it triggers an RTCPeerConnection Offer
                 if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
                     hostSocket.send(JSON.stringify({
                         type: 'viewer_joined',
@@ -155,16 +154,12 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
             }
 
             else if (data.type === 'input_event') {
-                // Only allow input events from the active player to reach the host
                 if (activePlayer && activePlayer.ws === ws && hostSocket && hostSocket.readyState === WebSocket.OPEN) {
                     hostSocket.send(rawMessage);
                 }
             }
 
-            // --- WEBRTC SIGNALING ROUTING ---
-
             else if (data.type === 'offer' || (data.type === 'candidate' && ws === hostSocket)) {
-                // Host sending an offer/candidate to a specific viewer
                 const targetId = data.targetViewerId;
                 wss.clients.forEach((client: ExtendedWebSocket) => {
                     if (client.id === targetId && client.readyState === WebSocket.OPEN) {
@@ -174,9 +169,7 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
             }
 
             else if (data.type === 'answer' || (data.type === 'candidate' && ws !== hostSocket)) {
-                // Viewer sending an answer/candidate back to the Host
                 if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
-                    // Append the viewerId so the Python script associates it with the correct peer connection
                     const payload = { ...data, viewerId: ws.id };
                     hostSocket.send(JSON.stringify(payload));
                 }
@@ -199,7 +192,6 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
             playerQueue.length = 0;
             broadcastQueueUpdate();
         } else {
-            // Inform the Python script to destroy the viewer's RTCPeerConnection to prevent memory leaks
             if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
                 hostSocket.send(JSON.stringify({ type: 'viewer_left', viewerId: ws.id }));
             }
@@ -222,5 +214,5 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
 const PORT: number = Number(process.env.PORT) || 8080;
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Backend signaling server running on http://0.0.0.0:${PORT}`);
+    console.log(`Backend signaling server running on port ${PORT}`);
 });

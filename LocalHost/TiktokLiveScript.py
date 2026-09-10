@@ -13,10 +13,11 @@ import websockets
 import pygetwindow as gw
 
 from windows_capture import WindowsCapture
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, VideoStreamTrack
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, VideoStreamTrack, RTCConfiguration, RTCIceServer
 from av import VideoFrame
 
-SIGNALING_SERVER_URL = "ws://localhost:8080"
+# Set your deployed Render signaling URL (use wss:// for SSL encrypted production sockets)
+SIGNALING_SERVER_URL = "wss://your-render-app-name.onrender.com"
 TARGET_FPS = 60
 FRAME_INTERVAL = 1.0 / TARGET_FPS
 
@@ -40,7 +41,7 @@ KEY_SCANCODES = {
     "KeyN": 0x31,       # N (R3)
 }
 
-# --- BULLETPROOF 64-BIT SendInput C-STRUCT DEFINITIONS ---
+# --- 64-BIT SendInput C-STRUCT DEFINITIONS ---
 user32 = ctypes.WinDLL('user32', use_last_error=True)
 
 wintypes.ULONG_PTR = wintypes.WPARAM
@@ -97,27 +98,23 @@ def release_key_direct(scan_code):
                             time=0,
                             dwExtraInfo=0))
     user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
-# ---------------------------------------------------------
 
-# Non-blocking input queue
 input_queue = queue.Queue()
 
 def focus_target_window():
-    """Focus target game window reliably by bypassing Windows background restrictions."""
     global selected_hwnd
     if selected_hwnd:
         try:
             current_fg = user32.GetForegroundWindow()
             if current_fg != selected_hwnd:
-                user32.keybd_event(0x12, 0, 0, 0) # Alt down
-                user32.keybd_event(0x12, 0, 2, 0) # Alt up
+                user32.keybd_event(0x12, 0, 0, 0)
+                user32.keybd_event(0x12, 0, 2, 0)
                 user32.SetForegroundWindow(selected_hwnd)
                 time.sleep(0.01)
         except Exception as err:
             print(f"[Focus Error] Could not activate window: {err}")
 
 def input_worker():
-    """Processes queued key events sequentially without blocking asyncio event loop."""
     while True:
         try:
             key_code, action = input_queue.get(timeout=1.0)
@@ -140,7 +137,6 @@ def input_worker():
 
 threading.Thread(target=input_worker, daemon=True).start()
 
-# Global frame buffer for thread-safe access
 latest_frame = None
 latest_frame_lock = threading.Lock()
 
@@ -231,7 +227,6 @@ def start_window_capture(hwnd):
                     else:
                         img = np.array(frame)
 
-                    # Fast array slicing instead of slow cv2.cvtColor for lower CPU latency
                     if img.shape[2] == 4:
                         rgb_img = img[:, :, [2, 1, 0]]
                     elif img.shape[2] == 3:
@@ -239,7 +234,6 @@ def start_window_capture(hwnd):
                     else:
                         rgb_img = img
 
-                    # Downscale frame to 720p to dramatically speed up CPU encoding
                     rgb_img = cv2.resize(rgb_img, (1280, 720), interpolation=cv2.INTER_NEAREST)
 
                     with latest_frame_lock:
@@ -266,7 +260,6 @@ class ScreenCaptureTrack(VideoStreamTrack):
     async def recv(self):
         pts, time_base = await self.next_timestamp()
 
-        # Direct pointer reference to avoid costly frame copies
         with latest_frame_lock:
             frame_rgb = latest_frame
 
@@ -275,7 +268,6 @@ class ScreenCaptureTrack(VideoStreamTrack):
             cv2.putText(frame_rgb, "Select Game Window in Selector...", (280, 360),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-        # Quick bitwise ensure dimensions are strictly even for H.264 encoder
         h, w, _ = frame_rgb.shape
         h &= ~1
         w &= ~1
@@ -288,12 +280,17 @@ class ScreenCaptureTrack(VideoStreamTrack):
 
 peers = {}
 
+# Production WebRTC STUN Configuration (Free Google STUN servers)
+rtc_config = RTCConfiguration(iceServers=[
+    RTCIceServer(urls=["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"])
+])
+
 async def connect_and_listen():
     global peers
 
     try:
         async with websockets.connect(SIGNALING_SERVER_URL) as websocket:
-            print("Connected to Signaling Server as Host.")
+            print("Connected to Production Signaling Server as Host.")
             await websocket.send(json.dumps({"type": "register_host"}))
 
             async for message in websocket:
@@ -305,7 +302,7 @@ async def connect_and_listen():
                         viewer_id = data.get("viewerId")
                         print(f"Viewer {viewer_id} connected! Creating WebRTC stream...")
                         
-                        pc = RTCPeerConnection()
+                        pc = RTCPeerConnection(configuration=rtc_config)
                         peers[viewer_id] = pc
                         pc.addTrack(ScreenCaptureTrack())
 

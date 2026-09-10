@@ -1,6 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-const SIGNALING_URL = 'ws://localhost:8080';
+// Automatically points to secure wss:// protocol when hosted on Render HTTPS domain
+const getSignalingUrl = () => {
+  if (typeof window !== 'undefined') {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    return `${protocol}//${host}`;
+  }
+  return 'ws://localhost:8080';
+};
+
+const SIGNALING_URL = getSignalingUrl();
 
 const ALLOWED_KEY_CODES = new Set([
   'KeyW', 'KeyS', 'KeyA', 'KeyD',
@@ -67,7 +77,6 @@ export default function App() {
     };
   }, [isCurrentPlayer, handleKeyDown, handleKeyUp]);
 
-  // Connect everyone as a viewer upon loading the page
   useEffect(() => {
     let isMounted = true;
     const ws = new WebSocket(SIGNALING_URL);
@@ -89,7 +98,6 @@ export default function App() {
           setQueueList(message.queue);
           setTimeLeft(message.timeRemaining);
         } else if (message.type === 'offer') {
-          // Optimized for lowest possible connection latency
           const pc = new RTCPeerConnection({
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
@@ -222,7 +230,6 @@ export default function App() {
           <span>P1: {activePlayerInfo ? activePlayerInfo.playerName : 'WAITING FOR CHALLENGER'}</span>
         </div>
 
-        {/* Video element highly optimized for live low-latency playout */}
         <video
           ref={videoRef}
           autoPlay
