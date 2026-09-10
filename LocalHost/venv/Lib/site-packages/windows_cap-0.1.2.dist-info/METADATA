@@ -1,0 +1,46 @@
+Metadata-Version: 2.1
+Name: windows-cap
+Version: 0.1.2
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Development Status :: 3 - Alpha
+Classifier: Programming Language :: Rust
+Classifier: Programming Language :: Python :: Implementation :: CPython
+Classifier: Programming Language :: Python :: Implementation :: PyPy
+Classifier: Environment :: GPU
+Classifier: Environment :: Win32 (MS Windows)
+Classifier: Operating System :: Microsoft :: Windows :: Windows 10
+Classifier: Operating System :: Microsoft :: Windows :: Windows 11
+Classifier: Topic :: Multimedia :: Graphics :: Capture :: Screen Capture
+Requires-Dist: opencv-python ; extra == 'dev'
+Provides-Extra: dev
+License-File: LICENSE
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown; charset=UTF-8; variant=GFM
+
+# Windows Capture
+
+Utilize the Windows Graphics Capture API to capture the client area of a window.
+
+Requires Windows 10 and Python 3.8 or later.
+
+## Usage
+
+```python
+import cv2
+import numpy as np
+from windows_cap import WindowCapture
+
+# Create a WindowCapture object with the window title and class name (optional)
+wincap = WindowCapture("Untitled - Notepad", "CLASSNAME")
+
+while True:
+    data = wincap.next()
+    w, h = wincap.client_size
+    img = np.frombuffer(data, dtype=np.uint8)
+    img = np.reshape(img, (h, w, 4))
+    img = cv2.resize(img, (w // 4, h // 4))
+    cv2.imshow("WGC", img)
+    if cv2.waitKey(1) == ord('q'):
+        cv2.destroyAllWindows()
+        break
+```
