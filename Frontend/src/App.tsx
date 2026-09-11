@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-// Dynamically inject Tailwind CSS script into the document head
 if (typeof document !== 'undefined' && !document.getElementById('tailwind-cdn')) {
   const script = document.createElement('script');
   script.id = 'tailwind-cdn';
@@ -8,7 +7,6 @@ if (typeof document !== 'undefined' && !document.getElementById('tailwind-cdn'))
   document.head.appendChild(script);
 }
 
-// Automatically points to secure wss:// protocol when hosted on Render HTTPS domain
 const getSignalingUrl = () => {
   if (typeof window !== 'undefined') {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -45,15 +43,14 @@ export default function App() {
   const [queueList, setQueueList] = useState<QueuePlayerInfo[]>([]);
   const [timeLeft, setTimeLeft] = useState<number>(120);
 
-  // Layout mode state for movement controls
   const [dPadMode, setDPadMode] = useState<DPadMode>('buttons');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  const candidateQueueRef = useRef<RTCIceCandidateInit[]>([]);
   const pressedKeys = useRef<Set<string>>(new Set());
 
-  // Joystick state tracking
   const joystickBaseRef = useRef<HTMLDivElement | null>(null);
   const [joystickPos, setJoystickPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const isDraggingJoystick = useRef(false);
@@ -95,6 +92,12 @@ export default function App() {
     };
   }, [isCurrentPlayer, handleKeyDown, handleKeyUp]);
 
+  const requestVideoStream = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'request_stream' }));
+    }
+  }, []);
+
   useEffect(() => {
     let isMounted = true;
     const ws = new WebSocket(SIGNALING_URL);
@@ -103,7 +106,7 @@ export default function App() {
     ws.onopen = () => {
       if (!isMounted) return;
       setStatus('INSERT COIN TO PLAY');
-      ws.send(JSON.stringify({ type: 'request_stream' }));
+      requestVideoStream();
     };
 
     ws.onmessage = async (event) => {
@@ -115,16 +118,26 @@ export default function App() {
           setActivePlayerInfo(message.activePlayer);
           setQueueList(message.queue);
           setTimeLeft(message.timeRemaining);
+        } else if (message.type === 'host_connected') {
+          requestVideoStream();
         } else if (message.type === 'offer') {
+          if (pcRef.current) {
+            pcRef.current.close();
+            pcRef.current = null;
+          }
+
+          candidateQueueRef.current = [];
+
           const pc = new RTCPeerConnection({
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
               { urls: 'stun:stun1.l.google.com:19302' }
             ],
-            iceTransportPolicy: 'all',
             bundlePolicy: 'max-bundle'
           });
           pcRef.current = pc;
+
+          pc.addTransceiver('video', { direction: 'recvonly' });
 
           pc.onicecandidate = (e) => {
             if (e.candidate && ws.readyState === WebSocket.OPEN) {
@@ -133,12 +146,26 @@ export default function App() {
           };
 
           pc.ontrack = (e) => {
-            if (videoRef.current && e.streams[0]) {
-              videoRef.current.srcObject = e.streams[0];
+            if (videoRef.current) {
+              const stream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([e.track]);
+              videoRef.current.srcObject = stream;
+              videoRef.current.play().catch((err) => {
+                console.warn('Autoplay prevented, retrying on user click:', err);
+              });
             }
           };
 
-          await pc.setRemoteDescription(new RTCSessionDescription({ type: message.sdp_type, sdp: message.sdp }));
+          const remoteSdpType = message.sdp_type || message.type || 'offer';
+          await pc.setRemoteDescription(new RTCSessionDescription({ type: remoteSdpType, sdp: message.sdp }));
+
+          // Process queued ICE candidates arriving before remote description resolution
+          while (candidateQueueRef.current.length > 0) {
+            const cand = candidateQueueRef.current.shift();
+            if (cand) {
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
+            }
+          }
+
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
 
@@ -152,8 +179,12 @@ export default function App() {
             );
           }
         } else if (message.type === 'candidate') {
-          if (pcRef.current && message.candidate) {
-            await pcRef.current.addIceCandidate(new RTCIceCandidate(message.candidate));
+          if (message.candidate) {
+            if (pcRef.current && pcRef.current.remoteDescription && pcRef.current.remoteDescription.type) {
+              await pcRef.current.addIceCandidate(new RTCIceCandidate(message.candidate));
+            } else {
+              candidateQueueRef.current.push(message.candidate);
+            }
           }
         } else if (message.type === 'session_started') {
           setIsCurrentPlayer(true);
@@ -193,7 +224,7 @@ export default function App() {
         ws.close();
       }
     };
-  }, []);
+  }, [requestVideoStream]);
 
   const joinQueue = () => {
     if (!playerName.trim()) {
@@ -255,7 +286,6 @@ export default function App() {
     };
   }, [handlePressStart, handlePressEnd]);
 
-  // Joystick math & event handlers
   const updateJoystickPosition = useCallback((clientX: number, clientY: number) => {
     if (!joystickBaseRef.current || !isCurrentPlayer) return;
 
@@ -276,8 +306,7 @@ export default function App() {
 
     setJoystickPos({ x: knobX, y: knobY });
 
-    // Threshold angle checks to send WASD inputs based on stick direction
-    const threshold = 12; // Deadzone threshold in pixels
+    const threshold = 12;
     const activeDirections = {
       KeyW: false,
       KeyS: false,
@@ -288,17 +317,12 @@ export default function App() {
     if (clampedDistance > threshold) {
       const deg = (angle * 180) / Math.PI;
 
-      // Up (KeyW)
       if (deg > -135 && deg < -45) activeDirections.KeyW = true;
-      // Down (KeyS)
       if (deg > 45 && deg < 135) activeDirections.KeyS = true;
-      // Left (KeyA)
       if (deg > 135 || deg < -135) activeDirections.KeyA = true;
-      // Right (KeyD)
       if (deg > -45 && deg < 45) activeDirections.KeyD = true;
     }
 
-    // Trigger key events for state changes
     (['KeyW', 'KeyS', 'KeyA', 'KeyD'] as const).forEach((code) => {
       if (activeDirections[code]) {
         if (!pressedKeys.current.has(code)) {
@@ -382,7 +406,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full bg-[#0a0a0c] text-[#00ffcc] font-mono flex flex-col items-center p-2 sm:p-4 overflow-y-auto">
-      {/* Marquee Header */}
       <div className="w-full max-w-4xl bg-gradient-to-b from-[#e60000] to-[#800000] border-2 sm:border-3 border-[#ffcc00] rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center shadow-[0_0_15px_#ff0000] shrink-0">
         <h1 className="m-0 text-base sm:text-2xl font-black tracking-widest text-white drop-shadow-[2px_2px_0_#000]">
           TEKKEN 7 ARCADE TIKTOK LIVE MULTIPLAYER
@@ -392,16 +415,13 @@ export default function App() {
         </div>
       </div>
 
-      {/* Error Banner */}
       {errorMessage && (
         <div className="w-full max-w-4xl bg-[#ff0055] text-white text-xs px-3 py-1 rounded my-1 text-center font-bold shrink-0">
           {errorMessage}
         </div>
       )}
 
-      {/* Main Cabinet Display & Queue View */}
       <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-4 gap-2 my-1.5 min-h-[300px]">
-        {/* Stream Frame */}
         <div className="md:col-span-3 relative bg-black border-2 sm:border-4 border-[#333] rounded-lg sm:rounded-xl overflow-hidden flex flex-col justify-between shadow-[0_0_20px_rgba(0,255,204,0.15)] min-h-[250px]">
           <div className="flex justify-between items-center px-3 py-1 bg-[#111] border-b border-[#222] text-[10px] sm:text-xs text-[#00ffcc] shrink-0 z-10">
             <span>TIME: <strong className="text-white">{formatTime(timeLeft)}</strong></span>
@@ -416,9 +436,10 @@ export default function App() {
               muted
               disablePictureInPicture
               className="w-full h-full object-contain"
-              onLoadedMetadata={(e) => {
-                const video = e.currentTarget;
-                video.play();
+              onClick={() => {
+                if (videoRef.current) {
+                  videoRef.current.play().catch(() => { });
+                }
               }}
             />
 
@@ -432,7 +453,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Upcoming Challengers Sidebar */}
         <div className="hidden md:flex md:col-span-1 bg-[#111] border-2 border-[#222] rounded-lg sm:rounded-xl p-2.5 flex-col max-h-[400px]">
           <h3 className="m-0 mb-2 text-[#ffcc00] text-xs font-bold border-b border-[#222] pb-1 shrink-0">
             CHALLENGERS ({queueList.length})
@@ -453,7 +473,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Coin/Queue Controls */}
       <div className="w-full max-w-4xl shrink-0 my-1">
         {!inQueue ? (
           <div className="flex gap-2 justify-center items-center">
@@ -485,9 +504,7 @@ export default function App() {
         )}
       </div>
 
-      {/* Control Deck */}
       <div className="w-full max-w-4xl bg-[#18181c] border-2 sm:border-3 border-[#333] rounded-xl sm:rounded-2xl p-2 sm:p-3 flex flex-col gap-2 shrink-0 shadow-2xl my-2">
-        {/* Movement Mode Toggle */}
         <div className="flex justify-center items-center gap-2 pb-1 border-b border-[#222]">
           <span className="text-[10px] sm:text-xs text-[#888] uppercase font-bold">STICK MODE:</span>
           <div className="flex bg-[#0d0d10] p-0.5 rounded-lg border border-[#333]">
@@ -516,9 +533,7 @@ export default function App() {
         </div>
 
         <div className="flex flex-row justify-between items-center w-full px-2 sm:px-6 gap-2">
-          {/* Movement Section */}
           <div className="flex items-center gap-3">
-            {/* D-Pad Buttons */}
             {(dPadMode === 'buttons' || dPadMode === 'both') && (
               <div className="flex flex-col items-center gap-1">
                 <button
@@ -554,7 +569,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Virtual Joystick */}
             {(dPadMode === 'joystick' || dPadMode === 'both') && (
               <div className="flex flex-col items-center">
                 <div
@@ -571,14 +585,12 @@ export default function App() {
                   }}
                   className="relative w-28 h-28 sm:w-32 sm:h-32 bg-[#111] rounded-full border-4 border-[#333] flex items-center justify-center shadow-inner cursor-grab active:cursor-grabbing select-none"
                 >
-                  {/* Gate Markings */}
                   <div className="absolute inset-2 border border-dashed border-[#222] rounded-full pointer-events-none" />
                   <span className="absolute top-1 text-[9px] text-[#444] font-bold pointer-events-none">W</span>
                   <span className="absolute bottom-1 text-[9px] text-[#444] font-bold pointer-events-none">S</span>
                   <span className="absolute left-1 text-[9px] text-[#444] font-bold pointer-events-none">A</span>
                   <span className="absolute right-1 text-[9px] text-[#444] font-bold pointer-events-none">D</span>
 
-                  {/* Joystick Shaft & Balltop Stick Handle */}
                   <div
                     className="absolute w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-tr from-[#cc0000] via-[#ff3333] to-[#ff9999] rounded-full border-2 border-white shadow-[0_4px_10px_rgba(0,0,0,0.8)] flex items-center justify-center transition-transform duration-75 ease-out pointer-events-none"
                     style={{
@@ -592,7 +604,6 @@ export default function App() {
             )}
           </div>
 
-          {/* Action Buttons Matrix */}
           <div className="flex flex-col gap-1.5">
             <div className="flex gap-1.5 sm:gap-2">
               <button
@@ -657,7 +668,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Utility Row */}
         <div className="flex justify-center flex-wrap gap-2 pt-1 border-t border-dashed border-[#333]">
           <button
             style={{ touchAction: 'manipulation' }}

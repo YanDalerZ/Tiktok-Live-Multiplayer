@@ -13,90 +13,115 @@ import websockets
 import pygetwindow as gw
 
 from windows_capture import WindowsCapture
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, VideoStreamTrack, RTCConfiguration, RTCIceServer
+from aiortc import (
+    RTCPeerConnection,
+    RTCSessionDescription,
+    RTCIceCandidate,
+    VideoStreamTrack,
+    RTCConfiguration,
+    RTCIceServer,
+)
+from aiortc.rtcrtpsender import RTCRtpSender
 from av import VideoFrame
 
-# Set your deployed Render signaling URL (use wss:// for SSL encrypted production sockets)
+# Configuration Parameters
 SIGNALING_SERVER_URL = "wss://tiktok-live-multiplayer.onrender.com/"
 TARGET_FPS = 60
 FRAME_INTERVAL = 1.0 / TARGET_FPS
 
-# DirectInput Hardware Scan Codes (Tekken 7 compatible)
+# DirectInput Hardware Scan Codes (Tekken 7 / DirectInput Compatible)
 KEY_SCANCODES = {
-    "KeyW": 0x11,       # W (Up)
-    "KeyS": 0x1F,       # S (Down)
-    "KeyA": 0x1E,       # A (Left)
-    "KeyD": 0x20,       # D (Right)
-    "KeyU": 0x16,       # U (X)
-    "KeyI": 0x17,       # I (Y)
-    "KeyO": 0x18,       # O (RB)
-    "KeyP": 0x19,       # P (LB)
-    "KeyJ": 0x24,       # J (A)
-    "KeyK": 0x25,       # K (B)
-    "KeyL": 0x26,       # L (RT)
-    "Semicolon": 0x27,  # ; (LT)
-    "KeyB": 0x30,       # B (Menu/Start)
-    "KeyV": 0x2F,       # V (View/Select)
-    "KeyC": 0x2E,       # C (L3)
-    "KeyN": 0x31,       # N (R3)
+    "KeyW": 0x11,      # W (Up)
+    "KeyS": 0x1F,      # S (Down)
+    "KeyA": 0x1E,      # A (Left)
+    "KeyD": 0x20,      # D (Right)
+    "KeyU": 0x16,      # U (X)
+    "KeyI": 0x17,      # I (Y)
+    "KeyO": 0x18,      # O (RB)
+    "KeyP": 0x19,      # P (LB)
+    "KeyJ": 0x24,      # J (A)
+    "KeyK": 0x25,      # K (B)
+    "KeyL": 0x26,      # L (RT)
+    "Semicolon": 0x27, # ; (LT)
+    "KeyB": 0x30,      # B (Menu/Start)
+    "KeyV": 0x2F,      # V (View/Select)
+    "KeyC": 0x2E,      # C (L3)
+    "KeyN": 0x31,      # R3
 }
 
-# --- 64-BIT SendInput C-STRUCT DEFINITIONS ---
+# Win32 C-Struct Definitions for High-Speed Input Injection
 user32 = ctypes.WinDLL('user32', use_last_error=True)
-
 wintypes.ULONG_PTR = wintypes.WPARAM
 user32.GetForegroundWindow.restype = wintypes.HWND
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 
 class MOUSEINPUT(ctypes.Structure):
-    _fields_ = (("dx",          wintypes.LONG),
-                ("dy",          wintypes.LONG),
-                ("mouseData",   wintypes.DWORD),
-                ("dwFlags",     wintypes.DWORD),
-                ("time",        wintypes.DWORD),
-                ("dwExtraInfo", wintypes.ULONG_PTR))
+    _fields_ = (
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.ULONG_PTR),
+    )
 
 class KEYBDINPUT(ctypes.Structure):
-    _fields_ = (("wVk",         wintypes.WORD),
-                ("wScan",       wintypes.WORD),
-                ("dwFlags",     wintypes.DWORD),
-                ("time",        wintypes.DWORD),
-                ("dwExtraInfo", wintypes.ULONG_PTR))
+    _fields_ = (
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", wintypes.ULONG_PTR),
+    )
 
 class HARDWAREINPUT(ctypes.Structure):
-    _fields_ = (("uMsg",    wintypes.DWORD),
-                ("wParamL", wintypes.WORD),
-                ("wParamH", wintypes.WORD))
+    _fields_ = (
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    )
 
 class INPUT(ctypes.Structure):
     class _INPUT(ctypes.Union):
-        _fields_ = (("ki", KEYBDINPUT),
-                    ("mi", MOUSEINPUT),
-                    ("hi", HARDWAREINPUT))
+        _fields_ = (
+            ("ki", KEYBDINPUT),
+            ("mi", MOUSEINPUT),
+            ("hi", HARDWAREINPUT),
+        )
     _anonymous_ = ("_input",)
-    _fields_ = (("type",   wintypes.DWORD),
-                ("_input", _INPUT))
+    _fields_ = (
+        ("type", wintypes.DWORD),
+        ("_input", _INPUT),
+    )
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_SCANCODE = 0x0008
 KEYEVENTF_KEYUP = 0x0002
 
 def press_key_direct(scan_code):
-    x = INPUT(type=INPUT_KEYBOARD,
-              ki=KEYBDINPUT(wVk=0,
-                            wScan=scan_code,
-                            dwFlags=KEYEVENTF_SCANCODE,
-                            time=0,
-                            dwExtraInfo=0))
+    x = INPUT(
+        type=INPUT_KEYBOARD,
+        ki=KEYBDINPUT(
+            wVk=0,
+            wScan=scan_code,
+            dwFlags=KEYEVENTF_SCANCODE,
+            time=0,
+            dwExtraInfo=0,
+        ),
+    )
     user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
 
 def release_key_direct(scan_code):
-    x = INPUT(type=INPUT_KEYBOARD,
-              ki=KEYBDINPUT(wVk=0,
-                            wScan=scan_code,
-                            dwFlags=KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP,
-                            time=0,
-                            dwExtraInfo=0))
+    x = INPUT(
+        type=INPUT_KEYBOARD,
+        ki=KEYBDINPUT(
+            wVk=0,
+            wScan=scan_code,
+            dwFlags=KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP,
+            time=0,
+            dwExtraInfo=0,
+        ),
+    )
     user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
 
 input_queue = queue.Queue()
@@ -110,7 +135,6 @@ def focus_target_window():
                 user32.keybd_event(0x12, 0, 0, 0)
                 user32.keybd_event(0x12, 0, 2, 0)
                 user32.SetForegroundWindow(selected_hwnd)
-                time.sleep(0.01)
         except Exception as err:
             print(f"[Focus Error] Could not activate window: {err}")
 
@@ -120,7 +144,6 @@ def input_worker():
             key_code, action = input_queue.get(timeout=1.0)
             if key_code in KEY_SCANCODES:
                 scan_code = KEY_SCANCODES[key_code]
-                
                 if selected_hwnd:
                     current_fg = user32.GetForegroundWindow()
                     if current_fg != selected_hwnd:
@@ -130,7 +153,6 @@ def input_worker():
                     press_key_direct(scan_code)
                 elif action == "keyup":
                     release_key_direct(scan_code)
-                    
             input_queue.task_done()
         except queue.Empty:
             continue
@@ -148,20 +170,19 @@ capture_instance = None
 class AppSelectorGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Stream Source Selector")
+        self.root.title("GPU WebRTC Streamer")
         self.root.geometry("420x180")
         self.root.attributes("-topmost", True)
 
-        tk.Label(root, text="Select Window to Stream:", font=("Arial", 10, "bold")).pack(pady=10)
-
+        tk.Label(root, text="Select Target Window:", font=("Arial", 10, "bold")).pack(pady=10)
         self.window_cb = ttk.Combobox(root, state="readonly", width=48)
         self.window_cb.pack(pady=5)
 
         btn_frame = tk.Frame(root)
         btn_frame.pack(pady=10)
 
-        tk.Button(btn_frame, text="Refresh Windows", command=self.refresh_windows).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Set Stream Source", command=self.set_source, bg="#0070f3", fg="white").pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Refresh", command=self.refresh_windows).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Start Low-Latency Stream", command=self.set_source, bg="#0070f3", fg="white").pack(side=tk.LEFT, padx=5)
 
         self.status_label = tk.Label(root, text="Status: Waiting for selection...", fg="gray")
         self.status_label.pack(pady=5)
@@ -174,7 +195,7 @@ class AppSelectorGUI:
         windows = gw.getAllWindows()
         options = []
         for w in windows:
-            if w.title and w.title.strip() and w.title != "Stream Source Selector":
+            if w.title and w.title.strip() and w.title != "GPU WebRTC Streamer":
                 display_str = f"{w.title} (HWND: {w._hWnd})"
                 self.windows_map[display_str] = (w._hWnd, w.title)
                 options.append(display_str)
@@ -190,10 +211,8 @@ class AppSelectorGUI:
         if selected_key in self.windows_map:
             selected_hwnd, selected_window_title = self.windows_map[selected_key]
             self.status_label.config(text=f"Streaming HWND: {selected_hwnd}", fg="green")
-            
             self.root.attributes("-topmost", False)
             self.root.iconify()
-            
             focus_target_window()
             start_window_capture(selected_hwnd)
 
@@ -227,14 +246,11 @@ def start_window_capture(hwnd):
                     else:
                         img = np.array(frame)
 
+                    # Direct contiguous sliced array reference to minimize CPU cycles
                     if img.shape[2] == 4:
-                        rgb_img = img[:, :, [2, 1, 0]]
-                    elif img.shape[2] == 3:
-                        rgb_img = img[:, :, ::-1]
+                        rgb_img = np.ascontiguousarray(img[:, :, :3])
                     else:
-                        rgb_img = img
-
-                    rgb_img = cv2.resize(rgb_img, (1280, 720), interpolation=cv2.INTER_NEAREST)
+                        rgb_img = np.ascontiguousarray(img)
 
                     with latest_frame_lock:
                         latest_frame = rgb_img
@@ -243,7 +259,7 @@ def start_window_capture(hwnd):
 
             @capture.event
             def on_closed():
-                print("[Graphics Capture] Session closed.")
+                print("[Graphics Capture] Session terminated.")
 
             capture.start()
         except Exception as e:
@@ -255,42 +271,81 @@ def start_window_capture(hwnd):
 class ScreenCaptureTrack(VideoStreamTrack):
     def __init__(self):
         super().__init__()
-        self._last_frame_time = 0
+        self._timestamp = 0
+        self._start_time = time.perf_counter()
 
     async def recv(self):
-        pts, time_base = await self.next_timestamp()
+        # Precise high-resolution sleep interval calculation
+        target_time = self._start_time + (self._timestamp + 1) * FRAME_INTERVAL
+        sleep_duration = target_time - time.perf_counter()
+        if sleep_duration > 0:
+            await asyncio.sleep(sleep_duration)
+
+        pts = self._timestamp * int(90000 / TARGET_FPS)
+        self._timestamp += 1
 
         with latest_frame_lock:
             frame_rgb = latest_frame
 
         if frame_rgb is None:
             frame_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
-            cv2.putText(frame_rgb, "Select Game Window in Selector...", (280, 360),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(
+                frame_rgb,
+                "Awaiting Source Window Stream...",
+                (320, 360),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 255, 255),
+                2,
+            )
 
+        # Dimension alignment (Dimensions must be even for standard hardware encoders)
         h, w, _ = frame_rgb.shape
         h &= ~1
         w &= ~1
         frame_rgb = frame_rgb[:h, :w]
 
-        new_frame = VideoFrame.from_ndarray(frame_rgb, format="rgb24")
+        # Instant zero-copy PyAV VideoFrame construction from numpy view
+        new_frame = VideoFrame.from_ndarray(frame_rgb, format="bgr24")
         new_frame.pts = pts
-        new_frame.time_base = time_base
+        new_frame.time_base = self.TIME_BASE
         return new_frame
 
 peers = {}
 
-# Production WebRTC STUN Configuration (Free Google STUN servers)
-rtc_config = RTCConfiguration(iceServers=[
-    RTCIceServer(urls=["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"])
-])
+rtc_config = RTCConfiguration(
+    iceServers=[
+        RTCIceServer(urls=["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"])
+    ]
+)
+
+def force_low_latency_codecs(pc):
+    """Restructures transceiver codec preferences to enforce real-time hardware H264 baseline profiles."""
+    transceivers = pc.getTransceivers()
+    for t in transceivers:
+        if t.kind == "video":
+            codecs = RTCRtpSender.getCapabilities("video").codecs
+            # Prioritize H.264 codecs with standard baseline properties
+            h264_codecs = [c for c in codecs if c.mimeType.lower() == "video/h264"]
+            if h264_codecs:
+                t.setCodecPreferences(h264_codecs)
+
+def optimize_sdp_for_low_latency(sdp):
+    """Applies low-latency SDP munging flags to remove network buffering delays."""
+    lines = sdp.split("\r\n")
+    new_lines = []
+    for line in lines:
+        if line.startswith("a=fmtp:") and "max-fs" not in line:
+            line += ";x-google-min-bitrate=2000;x-google-max-bitrate=6000;x-google-start-bitrate=4000"
+        new_lines.append(line)
+    return "\r\n".join(new_lines)
 
 async def connect_and_listen():
     global peers
 
     try:
         async with websockets.connect(SIGNALING_SERVER_URL) as websocket:
-            print("Connected to Production Signaling Server as Host.")
+            print("Connected to Signaling Server as Host.")
             await websocket.send(json.dumps({"type": "register_host"}))
 
             async for message in websocket:
@@ -300,38 +355,51 @@ async def connect_and_listen():
 
                     if msg_type == "viewer_joined":
                         viewer_id = data.get("viewerId")
-                        print(f"Viewer {viewer_id} connected! Creating WebRTC stream...")
-                        
+                        print(f"Viewer {viewer_id} connected. Negotiating WebRTC peer connection...")
+
                         pc = RTCPeerConnection(configuration=rtc_config)
                         peers[viewer_id] = pc
+
                         pc.addTrack(ScreenCaptureTrack())
+                        force_low_latency_codecs(pc)
 
                         @pc.on("icecandidate")
                         async def on_icecandidate(candidate, vid=viewer_id):
                             if candidate:
-                                await websocket.send(json.dumps({
-                                    "type": "candidate",
-                                    "targetViewerId": vid,
-                                    "candidate": {
-                                        "candidate": candidate.candidate,
-                                        "sdpMid": candidate.sdpMid,
-                                        "sdpMLineIndex": candidate.sdpMLineIndex
-                                    }
-                                }))
+                                await websocket.send(
+                                    json.dumps(
+                                        {
+                                            "type": "candidate",
+                                            "targetViewerId": vid,
+                                            "candidate": {
+                                                "candidate": candidate.candidate,
+                                                "sdpMid": candidate.sdpMid,
+                                                "sdpMLineIndex": candidate.sdpMLineIndex,
+                                            },
+                                        }
+                                    )
+                                )
 
                         offer = await pc.createOffer()
+                        munged_sdp = optimize_sdp_for_low_latency(offer.sdp)
+                        offer = RTCSessionDescription(sdp=munged_sdp, type=offer.type)
+                        
                         await pc.setLocalDescription(offer)
-                        await websocket.send(json.dumps({
-                            "type": "offer",
-                            "targetViewerId": viewer_id,
-                            "sdp": pc.localDescription.sdp,
-                            "sdp_type": pc.localDescription.type
-                        }))
+                        await websocket.send(
+                            json.dumps(
+                                {
+                                    "type": "offer",
+                                    "targetViewerId": viewer_id,
+                                    "sdp": pc.localDescription.sdp,
+                                    "sdp_type": pc.localDescription.type,
+                                }
+                            )
+                        )
 
                     elif msg_type == "viewer_left":
                         viewer_id = data.get("viewerId")
                         if viewer_id in peers:
-                            print(f"Cleaning up WebRTC for disconnected viewer: {viewer_id}")
+                            print(f"Disconnecting WebRTC pipeline for viewer: {viewer_id}")
                             await peers[viewer_id].close()
                             del peers[viewer_id]
 
@@ -367,7 +435,7 @@ async def connect_and_listen():
                                         protocol=parts[2] if len(parts) > 2 else "udp",
                                         type=parts[7] if len(parts) > 7 else "host",
                                         sdpMid=sdp_mid,
-                                        sdpMLineIndex=sdp_mline_index
+                                        sdpMLineIndex=sdp_mline_index,
                                     )
                                     await pc.addIceCandidate(candidate_obj)
 
@@ -377,10 +445,10 @@ async def connect_and_listen():
                         input_queue.put((key_code, action))
 
                 except Exception as e:
-                    print(f"Error handling message: {e}")
+                    print(f"Message handling exception: {e}")
 
     except (websockets.exceptions.ConnectionClosedError, ConnectionResetError) as e:
-        print(f"[WebSocket] Disconnected: {e}. Reconnecting in 3 seconds...")
+        print(f"[WebSocket] Peer dropped connection: {e}. Reconnecting in 3 seconds...")
         for vid, pc in list(peers.items()):
             await pc.close()
         peers.clear()
