@@ -130,8 +130,6 @@ export default function App() {
           });
           pcRef.current = pc;
 
-          pc.addTransceiver('video', { direction: 'recvonly' });
-
           pc.onicecandidate = (e) => {
             if (e.candidate && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'candidate', candidate: e.candidate.toJSON() }));

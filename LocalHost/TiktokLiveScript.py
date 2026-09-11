@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import websockets
 import pygetwindow as gw
+from fractions import Fraction  # Added to resolve time_base AttributeError
 
 from windows_capture import WindowsCapture
 from aiortc import (
@@ -308,7 +309,10 @@ class ScreenCaptureTrack(VideoStreamTrack):
         # Instant zero-copy PyAV VideoFrame construction from numpy view
         new_frame = VideoFrame.from_ndarray(frame_rgb, format="bgr24")
         new_frame.pts = pts
-        new_frame.time_base = self.TIME_BASE
+        
+        # Fixed: Explicitly setting time_base using the Fraction library
+        new_frame.time_base = Fraction(1, 90000)
+        
         return new_frame
 
 peers = {}
@@ -363,34 +367,19 @@ async def connect_and_listen():
                         pc.addTrack(ScreenCaptureTrack())
                         force_low_latency_codecs(pc)
 
-                        @pc.on("icecandidate")
-                        async def on_icecandidate(candidate, vid=viewer_id):
-                            if candidate:
-                                await websocket.send(
-                                    json.dumps(
-                                        {
-                                            "type": "candidate",
-                                            "targetViewerId": vid,
-                                            "candidate": {
-                                                "candidate": candidate.candidate,
-                                                "sdpMid": candidate.sdpMid,
-                                                "sdpMLineIndex": candidate.sdpMLineIndex,
-                                            },
-                                        }
-                                    )
-                                )
-
+                        # Create the offer and set it locally without munging it to avoid local parsing errors
                         offer = await pc.createOffer()
-                        munged_sdp = optimize_sdp_for_low_latency(offer.sdp)
-                        offer = RTCSessionDescription(sdp=munged_sdp, type=offer.type)
-                        
                         await pc.setLocalDescription(offer)
+                        
+                        # Munge the SDP right before transmission to the remote viewer
+                        munged_sdp = optimize_sdp_for_low_latency(pc.localDescription.sdp)
+                        
                         await websocket.send(
                             json.dumps(
                                 {
                                     "type": "offer",
                                     "targetViewerId": viewer_id,
-                                    "sdp": pc.localDescription.sdp,
+                                    "sdp": munged_sdp,
                                     "sdp_type": pc.localDescription.type,
                                 }
                             )
