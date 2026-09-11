@@ -35,13 +35,22 @@ let timerInterval: NodeJS.Timeout | null = null;
 
 const MATCH_DURATION_SECONDS = 120;
 
+app.get('/health', (_req, res) => {
+    res.json({
+        status: 'online',
+        hostConnected: !!(hostSocket && hostSocket.readyState === WebSocket.OPEN),
+        activePlayer: activePlayer ? activePlayer.playerName : null,
+        queueLength: playerQueue.length,
+    });
+});
+
 const broadcastQueueUpdate = () => {
     const queueData = {
         type: 'queue_update',
         activePlayer: activePlayer ? { id: activePlayer.id, playerName: activePlayer.playerName } : null,
         queue: playerQueue.map((p) => ({ id: p.id, playerName: p.playerName })),
         timeRemaining: timerSecondsRemaining,
-        hostOnline: !!(hostSocket && hostSocket.readyState === WebSocket.OPEN)
+        hostOnline: !!(hostSocket && hostSocket.readyState === WebSocket.OPEN),
     };
 
     const payload = JSON.stringify(queueData);
@@ -121,10 +130,9 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
                     hostSocket.close(1000, 'Replaced by new host instance');
                 }
                 hostSocket = ws;
-                console.log('[Server] Host registered successfully.');
+                console.log(`[Server] Python Host connected and registered. Socket ID: ${ws.id}`);
                 ws.send(JSON.stringify({ type: 'registered', role: 'host' }));
 
-                // Notify all connected viewers to request video stream from newly connected host
                 wss.clients.forEach((client: ExtendedWebSocket) => {
                     if (client !== hostSocket && client.readyState === WebSocket.OPEN) {
                         client.send(JSON.stringify({ type: 'host_connected' }));
@@ -135,11 +143,14 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
             }
 
             else if (data.type === 'request_stream') {
+                console.log(`[Server] Viewer ${ws.id} requested WebRTC stream.`);
                 if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
                     hostSocket.send(JSON.stringify({
                         type: 'viewer_joined',
                         viewerId: ws.id
                     }));
+                } else {
+                    ws.send(JSON.stringify({ type: 'error', message: 'Host stream is currently offline.' }));
                 }
             }
 
@@ -151,6 +162,7 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
 
                 if (!activePlayer) {
                     activePlayer = newPlayer;
+                    console.log(`[Server] Player ${playerName} (${ws.id}) took active control.`);
                     ws.send(JSON.stringify({ type: 'session_started', role: 'guest' }));
 
                     timerSecondsRemaining = MATCH_DURATION_SECONDS;
@@ -164,6 +176,7 @@ wss.on('connection', (ws: ExtendedWebSocket) => {
                     }, MATCH_DURATION_SECONDS * 1000);
                 } else {
                     playerQueue.push(newPlayer);
+                    console.log(`[Server] Player ${playerName} (${ws.id}) added to queue at position ${playerQueue.length}.`);
                     ws.send(JSON.stringify({ type: 'queued', position: playerQueue.length }));
                 }
 
@@ -235,5 +248,5 @@ app.get('*', (req, res) => {
 const PORT: number = Number(process.env.PORT) || 8080;
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Monolith server running on port ${PORT}`);
+    console.log(`[Server] Monolith server running on http://0.0.0.0:${PORT}`);
 });

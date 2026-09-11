@@ -12,6 +12,12 @@ import numpy as np
 import websockets
 import pygetwindow as gw
 from fractions import Fraction
+import urllib.request
+import subprocess
+import os
+import sys
+import re
+import shutil
 
 from windows_capture import WindowsCapture
 from aiortc import (
@@ -25,32 +31,159 @@ from aiortc import (
 from aiortc.rtcrtpsender import RTCRtpSender
 from av import VideoFrame
 
-# Configuration Parameters
-SIGNALING_SERVER_URL = "wss://tiktok-live-multiplayer.onrender.com/"
+def find_cloudflared_executable():
+    """Locates cloudflared executable in PATH or common Windows directories."""
+    # Check system PATH
+    executable = shutil.which("cloudflared")
+    if executable:
+        return executable
+
+    # Check current directory and common installation locations
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    possible_paths = [
+        os.path.join(script_dir, "cloudflared.exe"),
+        "C:\\cloudflared\\cloudflared.exe",
+        "C:\\Program Files\\cloudflared\\cloudflared.exe",
+        "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe",
+        os.path.expanduser("~\\cloudflared.exe"),
+    ]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+
+    return None
+
+def start_cloudflared_tunnel(local_port=8080):
+    """Spawns cloudflared tunnel process and extracts the dynamic trycloudflare URL."""
+    print(f"[Cloudflare Automator] Starting tunnel for local port {local_port}...")
+    
+    cloudflared_bin = find_cloudflared_executable()
+    if not cloudflared_bin:
+        raise FileNotFoundError(
+            "Could not locate 'cloudflared.exe'. Please ensure cloudflared is installed "
+            "and added to PATH, or place 'cloudflared.exe' in the same folder as this script."
+        )
+
+    print(f"[Cloudflare Automator] Executable resolved: {cloudflared_bin}")
+    cmd = [cloudflared_bin, "tunnel", "--url", f"http://localhost:{local_port}"]
+    
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1
+    )
+    
+    tunnel_url = None
+    url_pattern = re.compile(r"https://[-a-zA-Z0-9+]+\.trycloudflare\.com")
+
+    start_time = time.time()
+    timeout = 30  # Timeout after 30 seconds if URL is not found
+
+    while True:
+        line = process.stderr.readline()
+        if not line and process.poll() is not None:
+            break
+        
+        if line:
+            match = url_pattern.search(line)
+            if match:
+                https_url = match.group(0)
+                tunnel_url = https_url.replace("https://", "wss://")
+                print(f"[Cloudflare Automator] Active Tunnel Endpoint: {tunnel_url}")
+                break
+
+        if time.time() - start_time > timeout:
+            print("[Cloudflare Automator Error] Timed out waiting for Cloudflare tunnel URL.")
+            break
+
+    if not tunnel_url:
+        raise RuntimeError("Failed to obtain Cloudflare tunnel URL. Ensure local server on port 8080 is accessible.")
+
+    return process, tunnel_url
+
+# Automatically locate cloudflared, start tunnel, and assign signaling URL
+cloudflared_process, SIGNALING_SERVER_URL = start_cloudflared_tunnel(local_port=8080)
+
 TARGET_FPS = 60
 FRAME_INTERVAL = 1.0 / TARGET_FPS
 
-# DirectInput Hardware Scan Codes (Tekken 7 / DirectInput Compatible)
+# TURN Server Security Credentials
+TURN_USER = "myuser"
+TURN_PASS = "MyStrongPassword123!"
+TURN_PORT = 3478
+
+def get_public_ip():
+    """Fetches public IPv4 address dynamically from api.ipify.org."""
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=5) as response:
+            return response.read().decode("utf-8").strip()
+    except Exception as e:
+        print(f"[Network] Failed to fetch public IP: {e}")
+        return "127.0.0.1"
+
+def setup_and_start_coturn():
+    """Fetches WSL IP, updates Windows portproxy, and starts Coturn daemon in WSL."""
+    print("[Automator] Initializing TURN server deployment pipeline...")
+    
+    try:
+        wsl_ip = subprocess.check_output(["wsl", "hostname", "-I"]).decode("utf-8").strip().split()[0]
+        print(f"[Automator] Detected WSL2 Internal IP: {wsl_ip}")
+    except Exception as e:
+        print(f"[Automator Error] Could not obtain WSL2 IP: {e}")
+        wsl_ip = None
+
+    if wsl_ip:
+        netsh_cmd = f"netsh interface portproxy add v4tov4 listenport={TURN_PORT} listenaddress=0.0.0.0 connectport={TURN_PORT} connectaddress={wsl_ip}"
+        try:
+            subprocess.run(["powershell", "-Command", f"Start-Process powershell -ArgumentList '-Command {netsh_cmd}' -Verb RunAs"], check=False)
+            print(f"[Automator] Windows PortProxy mapped: Port {TURN_PORT} -> {wsl_ip}:{TURN_PORT}")
+        except Exception as e:
+            print(f"[Automator Warning] PortProxy command execution failed: {e}")
+
+    try:
+        subprocess.run(["wsl", "service", "coturn", "start"], check=True)
+        print("[Automator] Coturn service explicitly started in WSL2.")
+    except Exception as e:
+        print(f"[Automator Error] Failed to launch Coturn in WSL: {e}")
+
+PUBLIC_IP = get_public_ip()
+setup_and_start_coturn()
+
+print(f"[WebRTC Config] Operating with External TURN Server Endpoint: turn:{PUBLIC_IP}:{TURN_PORT}")
+
+rtc_config = RTCConfiguration(
+    iceServers=[
+        RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
+        RTCIceServer(
+            urls=[f"turn:{PUBLIC_IP}:{TURN_PORT}"],
+            username=TURN_USER,
+            credential=TURN_PASS
+        )
+    ]
+)
+
 KEY_SCANCODES = {
-    "KeyW": 0x11,      # W (Up)
-    "KeyS": 0x1F,      # S (Down)
-    "KeyA": 0x1E,      # A (Left)
-    "KeyD": 0x20,      # D (Right)
-    "KeyU": 0x16,      # U (X)
-    "KeyI": 0x17,      # I (Y)
-    "KeyO": 0x18,      # O (RB)
-    "KeyP": 0x19,      # P (LB)
-    "KeyJ": 0x24,      # J (A)
-    "KeyK": 0x25,      # K (B)
-    "KeyL": 0x26,      # L (RT)
-    "Semicolon": 0x27, # ; (LT)
-    "KeyB": 0x30,      # B (Menu/Start)
-    "KeyV": 0x2F,      # V (View/Select)
-    "KeyC": 0x2E,      # C (L3)
-    "KeyN": 0x31,      # R3
+    "KeyW": 0x11,
+    "KeyS": 0x1F,
+    "KeyA": 0x1E,
+    "KeyD": 0x20,
+    "KeyU": 0x16,
+    "KeyI": 0x17,
+    "KeyO": 0x18,
+    "KeyP": 0x19,
+    "KeyJ": 0x24,
+    "KeyK": 0x25,
+    "KeyL": 0x26,
+    "Semicolon": 0x27,
+    "KeyB": 0x30,
+    "KeyV": 0x2F,
+    "KeyC": 0x2E,
+    "KeyN": 0x31,
 }
 
-# Win32 C-Struct Definitions for High-Speed Input Injection
 user32 = ctypes.WinDLL('user32', use_last_error=True)
 wintypes.ULONG_PTR = wintypes.WPARAM
 user32.GetForegroundWindow.restype = wintypes.HWND
@@ -311,14 +444,7 @@ class ScreenCaptureTrack(VideoStreamTrack):
 
 peers = {}
 
-rtc_config = RTCConfiguration(
-    iceServers=[
-        RTCIceServer(urls=["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"])
-    ]
-)
-
 def force_low_latency_codecs(pc):
-    """Restructures transceiver codec preferences to enforce real-time hardware H264 baseline profiles."""
     transceivers = pc.getTransceivers()
     for t in transceivers:
         if t.kind == "video":
@@ -328,12 +454,10 @@ def force_low_latency_codecs(pc):
                 t.setCodecPreferences(h264_codecs)
 
 def optimize_sdp_for_low_latency(sdp):
-    """Applies low-latency SDP munging flags and elevates H.264 profile level limits."""
     lines = sdp.split("\r\n")
     new_lines = []
     for line in lines:
         if line.startswith("a=fmtp:"):
-            # Force level 4.2 (level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e02a)
             if "profile-level-id=" in line:
                 line = line.replace("profile-level-id=42e01f", "profile-level-id=42e02a")
             if "max-fs" not in line:
@@ -448,10 +572,15 @@ async def async_main():
         await connect_and_listen()
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    t = threading.Thread(target=run_asyncio_loop, args=(loop,), daemon=True)
-    t.start()
+    try:
+        loop = asyncio.new_event_loop()
+        t = threading.Thread(target=run_asyncio_loop, args=(loop,), daemon=True)
+        t.start()
 
-    root = tk.Tk()
-    app = AppSelectorGUI(root)
-    root.mainloop()
+        root = tk.Tk()
+        app = AppSelectorGUI(root)
+        root.mainloop()
+    finally:
+        if 'cloudflared_process' in locals() and cloudflared_process.poll() is None:
+            print("[Cloudflare Automator] Cleaning up cloudflared subprocess...")
+            cloudflared_process.terminate()
