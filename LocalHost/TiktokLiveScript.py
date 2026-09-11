@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import websockets
 import pygetwindow as gw
-from fractions import Fraction  # Added to resolve time_base AttributeError
+from fractions import Fraction
 
 from windows_capture import WindowsCapture
 from aiortc import (
@@ -247,14 +247,13 @@ def start_window_capture(hwnd):
                     else:
                         img = np.array(frame)
 
-                    # Direct contiguous sliced array reference to minimize CPU cycles
-                    if img.shape[2] == 4:
-                        rgb_img = np.ascontiguousarray(img[:, :, :3])
+                    if img.ndim == 3 and img.shape[2] == 4:
+                        bgr_img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
                     else:
-                        rgb_img = np.ascontiguousarray(img)
+                        bgr_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR) if img.ndim == 3 else img
 
                     with latest_frame_lock:
-                        latest_frame = rgb_img
+                        latest_frame = np.ascontiguousarray(bgr_img)
                 except Exception:
                     pass
 
@@ -276,7 +275,6 @@ class ScreenCaptureTrack(VideoStreamTrack):
         self._start_time = time.perf_counter()
 
     async def recv(self):
-        # Precise high-resolution sleep interval calculation
         target_time = self._start_time + (self._timestamp + 1) * FRAME_INTERVAL
         sleep_duration = target_time - time.perf_counter()
         if sleep_duration > 0:
@@ -286,12 +284,12 @@ class ScreenCaptureTrack(VideoStreamTrack):
         self._timestamp += 1
 
         with latest_frame_lock:
-            frame_rgb = latest_frame
+            frame_bgr = latest_frame
 
-        if frame_rgb is None:
-            frame_rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+        if frame_bgr is None:
+            frame_bgr = np.zeros((720, 1280, 3), dtype=np.uint8)
             cv2.putText(
-                frame_rgb,
+                frame_bgr,
                 "Awaiting Source Window Stream...",
                 (320, 360),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -300,19 +298,15 @@ class ScreenCaptureTrack(VideoStreamTrack):
                 2,
             )
 
-        # Dimension alignment (Dimensions must be even for standard hardware encoders)
-        h, w, _ = frame_rgb.shape
+        h, w, _ = frame_bgr.shape
         h &= ~1
         w &= ~1
-        frame_rgb = frame_rgb[:h, :w]
+        frame_bgr = frame_bgr[:h, :w]
 
-        # Instant zero-copy PyAV VideoFrame construction from numpy view
-        new_frame = VideoFrame.from_ndarray(frame_rgb, format="bgr24")
+        new_frame = VideoFrame.from_ndarray(frame_bgr, format="bgr24")
         new_frame.pts = pts
-        
-        # Fixed: Explicitly setting time_base using the Fraction library
         new_frame.time_base = Fraction(1, 90000)
-        
+
         return new_frame
 
 peers = {}
@@ -329,18 +323,21 @@ def force_low_latency_codecs(pc):
     for t in transceivers:
         if t.kind == "video":
             codecs = RTCRtpSender.getCapabilities("video").codecs
-            # Prioritize H.264 codecs with standard baseline properties
             h264_codecs = [c for c in codecs if c.mimeType.lower() == "video/h264"]
             if h264_codecs:
                 t.setCodecPreferences(h264_codecs)
 
 def optimize_sdp_for_low_latency(sdp):
-    """Applies low-latency SDP munging flags to remove network buffering delays."""
+    """Applies low-latency SDP munging flags and elevates H.264 profile level limits."""
     lines = sdp.split("\r\n")
     new_lines = []
     for line in lines:
-        if line.startswith("a=fmtp:") and "max-fs" not in line:
-            line += ";x-google-min-bitrate=2000;x-google-max-bitrate=6000;x-google-start-bitrate=4000"
+        if line.startswith("a=fmtp:"):
+            # Force level 4.2 (level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e02a)
+            if "profile-level-id=" in line:
+                line = line.replace("profile-level-id=42e01f", "profile-level-id=42e02a")
+            if "max-fs" not in line:
+                line += ";x-google-min-bitrate=2000;x-google-max-bitrate=6000;x-google-start-bitrate=4000"
         new_lines.append(line)
     return "\r\n".join(new_lines)
 
@@ -367,13 +364,11 @@ async def connect_and_listen():
                         pc.addTrack(ScreenCaptureTrack())
                         force_low_latency_codecs(pc)
 
-                        # Create the offer and set it locally without munging it to avoid local parsing errors
                         offer = await pc.createOffer()
                         await pc.setLocalDescription(offer)
-                        
-                        # Munge the SDP right before transmission to the remote viewer
+
                         munged_sdp = optimize_sdp_for_low_latency(pc.localDescription.sdp)
-                        
+
                         await websocket.send(
                             json.dumps(
                                 {
@@ -415,18 +410,19 @@ async def connect_and_listen():
 
                                 if cand_str:
                                     parts = cand_str.replace("candidate:", "").split()
-                                    candidate_obj = RTCIceCandidate(
-                                        component=int(parts[1]) if len(parts) > 1 else 1,
-                                        foundation=parts[0] if len(parts) > 0 else "",
-                                        ip=parts[4] if len(parts) > 4 else "",
-                                        port=int(parts[5]) if len(parts) > 5 else 0,
-                                        priority=int(parts[3]) if len(parts) > 3 else 0,
-                                        protocol=parts[2] if len(parts) > 2 else "udp",
-                                        type=parts[7] if len(parts) > 7 else "host",
-                                        sdpMid=sdp_mid,
-                                        sdpMLineIndex=sdp_mline_index,
-                                    )
-                                    await pc.addIceCandidate(candidate_obj)
+                                    if len(parts) >= 8:
+                                        candidate_obj = RTCIceCandidate(
+                                            component=int(parts[1]),
+                                            foundation=parts[0],
+                                            ip=parts[4],
+                                            port=int(parts[5]),
+                                            priority=int(parts[3]),
+                                            protocol=parts[2],
+                                            type=parts[7],
+                                            sdpMid=sdp_mid,
+                                            sdpMLineIndex=sdp_mline_index,
+                                        )
+                                        await pc.addIceCandidate(candidate_obj)
 
                     elif msg_type == "input_event":
                         key_code = data.get("code")

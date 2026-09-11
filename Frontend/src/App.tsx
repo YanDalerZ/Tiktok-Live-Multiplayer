@@ -23,7 +23,7 @@ interface QueuePlayerInfo {
   playerName: string;
 }
 
-type DPadMode = 'buttons' | 'joystick' | 'both';
+type DPadMode = 'buttons' | 'joystick';
 
 export default function App() {
   const [playerName, setPlayerName] = useState('');
@@ -47,6 +47,7 @@ export default function App() {
   const joystickBaseRef = useRef<HTMLDivElement | null>(null);
   const [joystickPos, setJoystickPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const isDraggingJoystick = useRef(false);
+  const joystickTouchIdRef = useRef<number | null>(null);
 
   const sendInput = useCallback((code: string, action: 'keydown' | 'keyup') => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -149,7 +150,6 @@ export default function App() {
           const remoteSdpType = message.sdp_type || message.type || 'offer';
           await pc.setRemoteDescription(new RTCSessionDescription({ type: remoteSdpType, sdp: message.sdp }));
 
-          // Process queued ICE candidates arriving before remote description resolution
           while (candidateQueueRef.current.length > 0) {
             const cand = candidateQueueRef.current.shift();
             if (cand) {
@@ -331,6 +331,7 @@ export default function App() {
 
   const resetJoystick = useCallback(() => {
     isDraggingJoystick.current = false;
+    joystickTouchIdRef.current = null;
     setJoystickPos({ x: 0, y: 0 });
 
     (['KeyW', 'KeyS', 'KeyA', 'KeyD'] as const).forEach((code) => {
@@ -341,35 +342,51 @@ export default function App() {
     });
   }, [sendInput]);
 
-  const handleJoystickStart = (clientX: number, clientY: number) => {
-    if (!isCurrentPlayer) return;
+  const handleJoystickTouchStart = (e: React.TouchEvent) => {
+    if (!isCurrentPlayer || isDraggingJoystick.current) return;
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+
     isDraggingJoystick.current = true;
-    updateJoystickPosition(clientX, clientY);
+    joystickTouchIdRef.current = touch.identifier;
+    updateJoystickPosition(touch.clientX, touch.clientY);
+  };
+
+  const handleJoystickMouseDown = (e: React.MouseEvent) => {
+    if ('ontouchstart' in window || !isCurrentPlayer) return;
+    e.preventDefault();
+    isDraggingJoystick.current = true;
+    updateJoystickPosition(e.clientX, e.clientY);
   };
 
   useEffect(() => {
     const handleMove = (e: MouseEvent | TouchEvent) => {
       if (!isDraggingJoystick.current) return;
-      if (e.cancelable) e.preventDefault();
 
-      let clientX = 0;
-      let clientY = 0;
-
-      if ('touches' in e && e.touches.length > 0) {
-        clientX = e.touches[0].clientX;
-        clientY = e.touches[0].clientY;
+      if ('touches' in e) {
+        for (let i = 0; i < e.touches.length; i++) {
+          const touch = e.touches[i];
+          if (touch.identifier === joystickTouchIdRef.current) {
+            updateJoystickPosition(touch.clientX, touch.clientY);
+            break;
+          }
+        }
       } else if ('clientX' in e) {
-        clientX = e.clientX;
-        clientY = e.clientY;
-      } else {
-        return;
+        updateJoystickPosition(e.clientX, e.clientY);
       }
-
-      updateJoystickPosition(clientX, clientY);
     };
 
-    const handleEnd = () => {
-      if (isDraggingJoystick.current) {
+    const handleEnd = (e: MouseEvent | TouchEvent) => {
+      if (!isDraggingJoystick.current) return;
+
+      if ('changedTouches' in e) {
+        for (let i = 0; i < e.changedTouches.length; i++) {
+          if (e.changedTouches[i].identifier === joystickTouchIdRef.current) {
+            resetJoystick();
+            break;
+          }
+        }
+      } else {
         resetJoystick();
       }
     };
@@ -501,31 +518,24 @@ export default function App() {
           <div className="flex bg-[#0d0d10] p-0.5 rounded-lg border border-[#333]">
             <button
               onClick={() => setDPadMode('buttons')}
-              className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase cursor-pointer transition-colors ${dPadMode === 'buttons' ? 'bg-[#00ffcc] text-black' : 'text-[#888] hover:text-white'
+              className={`px-3 py-0.5 text-[10px] font-bold rounded uppercase cursor-pointer transition-colors ${dPadMode === 'buttons' ? 'bg-[#00ffcc] text-black' : 'text-[#888] hover:text-white'
                 }`}
             >
               WASD
             </button>
             <button
               onClick={() => setDPadMode('joystick')}
-              className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase cursor-pointer transition-colors ${dPadMode === 'joystick' ? 'bg-[#00ffcc] text-black' : 'text-[#888] hover:text-white'
+              className={`px-3 py-0.5 text-[10px] font-bold rounded uppercase cursor-pointer transition-colors ${dPadMode === 'joystick' ? 'bg-[#00ffcc] text-black' : 'text-[#888] hover:text-white'
                 }`}
             >
               JOYSTICK
-            </button>
-            <button
-              onClick={() => setDPadMode('both')}
-              className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase cursor-pointer transition-colors ${dPadMode === 'both' ? 'bg-[#00ffcc] text-black' : 'text-[#888] hover:text-white'
-                }`}
-            >
-              BOTH
             </button>
           </div>
         </div>
 
         <div className="flex flex-row justify-between items-center w-full px-2 sm:px-6 gap-2">
           <div className="flex items-center gap-3">
-            {(dPadMode === 'buttons' || dPadMode === 'both') && (
+            {dPadMode === 'buttons' ? (
               <div className="flex flex-col items-center gap-1">
                 <button
                   style={{ touchAction: 'manipulation' }}
@@ -558,22 +568,14 @@ export default function App() {
                   </button>
                 </div>
               </div>
-            )}
-
-            {(dPadMode === 'joystick' || dPadMode === 'both') && (
+            ) : (
               <div className="flex flex-col items-center">
                 <div
                   ref={joystickBaseRef}
                   style={{ touchAction: 'none' }}
                   onContextMenu={(e) => e.preventDefault()}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    handleJoystickStart(e.clientX, e.clientY);
-                  }}
-                  onTouchStart={(e) => {
-                    if (e.cancelable) e.preventDefault();
-                    handleJoystickStart(e.touches[0].clientX, e.touches[0].clientY);
-                  }}
+                  onMouseDown={handleJoystickMouseDown}
+                  onTouchStart={handleJoystickTouchStart}
                   className="relative w-28 h-28 sm:w-32 sm:h-32 bg-[#111] rounded-full border-4 border-[#333] flex items-center justify-center shadow-inner cursor-grab active:cursor-grabbing select-none"
                 >
                   <div className="absolute inset-2 border border-dashed border-[#222] rounded-full pointer-events-none" />
