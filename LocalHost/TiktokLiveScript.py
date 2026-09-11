@@ -12,12 +12,6 @@ import numpy as np
 import websockets
 import pygetwindow as gw
 from fractions import Fraction
-import urllib.request
-import subprocess
-import os
-import sys
-import re
-import shutil
 
 from windows_capture import WindowsCapture
 from aiortc import (
@@ -31,157 +25,38 @@ from aiortc import (
 from aiortc.rtcrtpsender import RTCRtpSender
 from av import VideoFrame
 
-def find_cloudflared_executable():
-    """Locates cloudflared executable in PATH or common Windows directories."""
-    # Check system PATH
-    executable = shutil.which("cloudflared")
-    if executable:
-        return executable
-
-    # Check current directory and common installation locations
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    possible_paths = [
-        os.path.join(script_dir, "cloudflared.exe"),
-        "C:\\cloudflared\\cloudflared.exe",
-        "C:\\Program Files\\cloudflared\\cloudflared.exe",
-        "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe",
-        os.path.expanduser("~\\cloudflared.exe"),
-    ]
-
-    for path in possible_paths:
-        if os.path.exists(path):
-            return path
-
-    return None
-
-def start_cloudflared_tunnel(local_port=8080):
-    """Spawns cloudflared tunnel process and extracts the dynamic trycloudflare URL."""
-    print(f"[Cloudflare Automator] Starting tunnel for local port {local_port}...")
-    
-    cloudflared_bin = find_cloudflared_executable()
-    if not cloudflared_bin:
-        raise FileNotFoundError(
-            "Could not locate 'cloudflared.exe'. Please ensure cloudflared is installed "
-            "and added to PATH, or place 'cloudflared.exe' in the same folder as this script."
-        )
-
-    print(f"[Cloudflare Automator] Executable resolved: {cloudflared_bin}")
-    cmd = [cloudflared_bin, "tunnel", "--url", f"http://localhost:{local_port}"]
-    
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1
-    )
-    
-    tunnel_url = None
-    url_pattern = re.compile(r"https://[-a-zA-Z0-9+]+\.trycloudflare\.com")
-
-    start_time = time.time()
-    timeout = 30  # Timeout after 30 seconds if URL is not found
-
-    while True:
-        line = process.stderr.readline()
-        if not line and process.poll() is not None:
-            break
-        
-        if line:
-            match = url_pattern.search(line)
-            if match:
-                https_url = match.group(0)
-                tunnel_url = https_url.replace("https://", "wss://")
-                print(f"[Cloudflare Automator] Active Tunnel Endpoint: {tunnel_url}")
-                break
-
-        if time.time() - start_time > timeout:
-            print("[Cloudflare Automator Error] Timed out waiting for Cloudflare tunnel URL.")
-            break
-
-    if not tunnel_url:
-        raise RuntimeError("Failed to obtain Cloudflare tunnel URL. Ensure local server on port 8080 is accessible.")
-
-    return process, tunnel_url
-
-# Automatically locate cloudflared, start tunnel, and assign signaling URL
-cloudflared_process, SIGNALING_SERVER_URL = start_cloudflared_tunnel(local_port=8080)
+# Direct Production Configuration
+SIGNALING_SERVER_URL = "wss://tiktok-live-multiplayer.onrender.com"
+print(f"[Config] Connecting directly to Production Signaling Endpoint: {SIGNALING_SERVER_URL}")
 
 TARGET_FPS = 60
 FRAME_INTERVAL = 1.0 / TARGET_FPS
+STREAM_WIDTH = 1280
+STREAM_HEIGHT = 720
 
-# TURN Server Security Credentials
-TURN_USER = "myuser"
-TURN_PASS = "MyStrongPassword123!"
-TURN_PORT = 3478
-
-def get_public_ip():
-    """Fetches public IPv4 address dynamically from api.ipify.org."""
-    try:
-        with urllib.request.urlopen("https://api.ipify.org", timeout=5) as response:
-            return response.read().decode("utf-8").strip()
-    except Exception as e:
-        print(f"[Network] Failed to fetch public IP: {e}")
-        return "127.0.0.1"
-
-def setup_and_start_coturn():
-    """Fetches WSL IP, updates Windows portproxy, and starts Coturn daemon in WSL."""
-    print("[Automator] Initializing TURN server deployment pipeline...")
-    
-    try:
-        wsl_ip = subprocess.check_output(["wsl", "hostname", "-I"]).decode("utf-8").strip().split()[0]
-        print(f"[Automator] Detected WSL2 Internal IP: {wsl_ip}")
-    except Exception as e:
-        print(f"[Automator Error] Could not obtain WSL2 IP: {e}")
-        wsl_ip = None
-
-    if wsl_ip:
-        netsh_cmd = f"netsh interface portproxy add v4tov4 listenport={TURN_PORT} listenaddress=0.0.0.0 connectport={TURN_PORT} connectaddress={wsl_ip}"
-        try:
-            subprocess.run(["powershell", "-Command", f"Start-Process powershell -ArgumentList '-Command {netsh_cmd}' -Verb RunAs"], check=False)
-            print(f"[Automator] Windows PortProxy mapped: Port {TURN_PORT} -> {wsl_ip}:{TURN_PORT}")
-        except Exception as e:
-            print(f"[Automator Warning] PortProxy command execution failed: {e}")
-
-    try:
-        subprocess.run(["wsl", "service", "coturn", "start"], check=True)
-        print("[Automator] Coturn service explicitly started in WSL2.")
-    except Exception as e:
-        print(f"[Automator Error] Failed to launch Coturn in WSL: {e}")
-
-PUBLIC_IP = get_public_ip()
-setup_and_start_coturn()
-
-print(f"[WebRTC Config] Operating with External TURN Server Endpoint: turn:{PUBLIC_IP}:{TURN_PORT}")
-
+# Robust STUN/TURN ICE Configuration for universal cross-network WebRTC traversal
 rtc_config = RTCConfiguration(
     iceServers=[
         RTCIceServer(urls=["stun:stun.l.google.com:19302"]),
+        RTCIceServer(urls=["stun:stun1.l.google.com:19302"]),
         RTCIceServer(
-            urls=[f"turn:{PUBLIC_IP}:{TURN_PORT}"],
-            username=TURN_USER,
-            credential=TURN_PASS
+            urls=["turn:openrelay.metered.ca:80", "turn:openrelay.metered.ca:443", "turn:openrelay.metered.ca:443?transport=tcp"],
+            username="openrelayproject",
+            credential="openrelayproject"
+        ),
+        RTCIceServer(
+            urls=["turn:openrelay.metered.ca:443?transport=tcp"],
+            username="openrelayproject",
+            credential="openrelayproject"
         )
     ]
 )
 
 KEY_SCANCODES = {
-    "KeyW": 0x11,
-    "KeyS": 0x1F,
-    "KeyA": 0x1E,
-    "KeyD": 0x20,
-    "KeyU": 0x16,
-    "KeyI": 0x17,
-    "KeyO": 0x18,
-    "KeyP": 0x19,
-    "KeyJ": 0x24,
-    "KeyK": 0x25,
-    "KeyL": 0x26,
-    "Semicolon": 0x27,
-    "KeyB": 0x30,
-    "KeyV": 0x2F,
-    "KeyC": 0x2E,
-    "KeyN": 0x31,
+    "KeyW": 0x11, "KeyS": 0x1F, "KeyA": 0x1E, "KeyD": 0x20,
+    "KeyU": 0x16, "KeyI": 0x17, "KeyO": 0x18, "KeyP": 0x19,
+    "KeyJ": 0x24, "KeyK": 0x25, "KeyL": 0x26, "Semicolon": 0x27,
+    "KeyB": 0x30, "KeyV": 0x2F, "KeyC": 0x2E, "KeyN": 0x31,
 }
 
 user32 = ctypes.WinDLL('user32', use_last_error=True)
@@ -316,7 +191,7 @@ class AppSelectorGUI:
         btn_frame.pack(pady=10)
 
         tk.Button(btn_frame, text="Refresh", command=self.refresh_windows).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Start Low-Latency Stream", command=self.set_source, bg="#0070f3", fg="white").pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Start Stream", command=self.set_source, bg="#0070f3", fg="white").pack(side=tk.LEFT, padx=5)
 
         self.status_label = tk.Label(root, text="Status: Waiting for selection...", fg="gray")
         self.status_label.pack(pady=5)
@@ -385,8 +260,11 @@ def start_window_capture(hwnd):
                     else:
                         bgr_img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR) if img.ndim == 3 else img
 
+                    # Standardize frame resolution to 720p for WebRTC macroblock compliance
+                    resized = cv2.resize(bgr_img, (STREAM_WIDTH, STREAM_HEIGHT), interpolation=cv2.INTER_AREA)
+
                     with latest_frame_lock:
-                        latest_frame = np.ascontiguousarray(bgr_img)
+                        latest_frame = np.ascontiguousarray(resized)
                 except Exception:
                     pass
 
@@ -420,7 +298,7 @@ class ScreenCaptureTrack(VideoStreamTrack):
             frame_bgr = latest_frame
 
         if frame_bgr is None:
-            frame_bgr = np.zeros((720, 1280, 3), dtype=np.uint8)
+            frame_bgr = np.zeros((STREAM_HEIGHT, STREAM_WIDTH, 3), dtype=np.uint8)
             cv2.putText(
                 frame_bgr,
                 "Awaiting Source Window Stream...",
@@ -431,11 +309,6 @@ class ScreenCaptureTrack(VideoStreamTrack):
                 2,
             )
 
-        h, w, _ = frame_bgr.shape
-        h &= ~1
-        w &= ~1
-        frame_bgr = frame_bgr[:h, :w]
-
         new_frame = VideoFrame.from_ndarray(frame_bgr, format="bgr24")
         new_frame.pts = pts
         new_frame.time_base = Fraction(1, 90000)
@@ -444,120 +317,150 @@ class ScreenCaptureTrack(VideoStreamTrack):
 
 peers = {}
 
-def force_low_latency_codecs(pc):
-    transceivers = pc.getTransceivers()
-    for t in transceivers:
+def configure_transceiver_codecs(pc):
+    """Prefers H.264 for mobile/iOS compatibility; falls back to VP8."""
+    for t in pc.getTransceivers():
         if t.kind == "video":
-            codecs = RTCRtpSender.getCapabilities("video").codecs
+            capabilities = RTCRtpSender.getCapabilities("video")
+            codecs = capabilities.codecs
             h264_codecs = [c for c in codecs if c.mimeType.lower() == "video/h264"]
-            if h264_codecs:
-                t.setCodecPreferences(h264_codecs)
-
-def optimize_sdp_for_low_latency(sdp):
-    lines = sdp.split("\r\n")
-    new_lines = []
-    for line in lines:
-        if line.startswith("a=fmtp:"):
-            if "profile-level-id=" in line:
-                line = line.replace("profile-level-id=42e01f", "profile-level-id=42e02a")
-            if "max-fs" not in line:
-                line += ";x-google-min-bitrate=2000;x-google-max-bitrate=6000;x-google-start-bitrate=4000"
-        new_lines.append(line)
-    return "\r\n".join(new_lines)
+            vp8_codecs = [c for c in codecs if c.mimeType.lower() == "video/vp8"]
+            
+            preferred = h264_codecs + vp8_codecs
+            if preferred:
+                t.setCodecPreferences(preferred)
 
 async def connect_and_listen():
     global peers
 
+    websocket = None
+    retry_delay = 5
+    max_retries = 12
+    attempts = 0
+
+    while attempts < max_retries:
+        try:
+            attempts += 1
+            print(f"[Production Render] Connecting to {SIGNALING_SERVER_URL} (Attempt {attempts}/{max_retries})...")
+            websocket = await websockets.connect(SIGNALING_SERVER_URL, open_timeout=20)
+            print(f"Successfully Connected to Production Signaling Server as Host!")
+            break
+        except (Exception, OSError) as e:
+            print(f"[Render Spinning Up] Host connection failed: {e}. Retrying in {retry_delay}s...")
+            await asyncio.sleep(retry_delay)
+
+    if not websocket:
+        print("[Fatal] Unable to connect to Render signaling server.")
+        return
+
     try:
-        async with websockets.connect(SIGNALING_SERVER_URL) as websocket:
-            print("Connected to Signaling Server as Host.")
-            await websocket.send(json.dumps({"type": "register_host"}))
+        await websocket.send(json.dumps({"type": "register_host"}))
 
-            async for message in websocket:
-                try:
-                    data = json.loads(message)
-                    msg_type = data.get("type")
+        async for message in websocket:
+            try:
+                data = json.loads(message)
+                msg_type = data.get("type")
 
-                    if msg_type == "viewer_joined":
-                        viewer_id = data.get("viewerId")
-                        print(f"Viewer {viewer_id} connected. Negotiating WebRTC peer connection...")
+                if msg_type == "viewer_joined":
+                    viewer_id = data.get("viewerId")
+                    print(f"Viewer {viewer_id} connected via Render. Negotiating WebRTC peer connection...")
 
-                        pc = RTCPeerConnection(configuration=rtc_config)
-                        peers[viewer_id] = pc
+                    pc = RTCPeerConnection(configuration=rtc_config)
+                    peers[viewer_id] = pc
 
-                        pc.addTrack(ScreenCaptureTrack())
-                        force_low_latency_codecs(pc)
+                    pc.addTrack(ScreenCaptureTrack())
+                    configure_transceiver_codecs(pc)
 
-                        offer = await pc.createOffer()
-                        await pc.setLocalDescription(offer)
-
-                        munged_sdp = optimize_sdp_for_low_latency(pc.localDescription.sdp)
-
-                        await websocket.send(
-                            json.dumps(
-                                {
-                                    "type": "offer",
-                                    "targetViewerId": viewer_id,
-                                    "sdp": munged_sdp,
-                                    "sdp_type": pc.localDescription.type,
-                                }
+                    @pc.on("icecandidate")
+                    async def on_icecandidate(event):
+                        if event.candidate:
+                            cand_dict = {
+                                "candidate": event.candidate.candidate,
+                                "sdpMid": event.candidate.sdpMid if event.candidate.sdpMid is not None else "0",
+                                "sdpMLineIndex": event.candidate.sdpMLineIndex if event.candidate.sdpMLineIndex is not None else 0
+                            }
+                            await websocket.send(
+                                json.dumps(
+                                    {
+                                        "type": "candidate",
+                                        "targetViewerId": viewer_id,
+                                        "candidate": cand_dict
+                                    }
+                                )
                             )
+
+                    @pc.on("connectionstatechange")
+                    async def on_connectionstatechange():
+                        print(f"Peer {viewer_id} connection state: {pc.connectionState}")
+
+                    offer = await pc.createOffer()
+                    await pc.setLocalDescription(offer)
+
+                    await websocket.send(
+                        json.dumps(
+                            {
+                                "type": "offer",
+                                "targetViewerId": viewer_id,
+                                "sdp": pc.localDescription.sdp,
+                                "sdp_type": pc.localDescription.type,
+                            }
                         )
+                    )
 
-                    elif msg_type == "viewer_left":
-                        viewer_id = data.get("viewerId")
-                        if viewer_id in peers:
-                            print(f"Disconnecting WebRTC pipeline for viewer: {viewer_id}")
-                            await peers[viewer_id].close()
-                            del peers[viewer_id]
+                elif msg_type == "viewer_left":
+                    viewer_id = data.get("viewerId")
+                    if viewer_id in peers:
+                        print(f"Disconnecting WebRTC pipeline for viewer: {viewer_id}")
+                        await peers[viewer_id].close()
+                        del peers[viewer_id]
 
-                    elif msg_type == "answer":
-                        viewer_id = data.get("viewerId")
-                        if viewer_id in peers:
-                            answer = RTCSessionDescription(sdp=data["sdp"], type=data["sdp_type"])
-                            await peers[viewer_id].setRemoteDescription(answer)
+                elif msg_type == "answer":
+                    viewer_id = data.get("viewerId")
+                    if viewer_id in peers:
+                        answer = RTCSessionDescription(sdp=data["sdp"], type=data["sdp_type"])
+                        await peers[viewer_id].setRemoteDescription(answer)
 
-                    elif msg_type == "candidate":
-                        viewer_id = data.get("viewerId")
-                        if viewer_id in peers:
-                            pc = peers[viewer_id]
-                            cand_data = data.get("candidate")
-                            if cand_data and pc.remoteDescription is not None:
-                                if isinstance(cand_data, dict):
-                                    cand_str = cand_data.get("candidate", "")
-                                    sdp_mid = cand_data.get("sdpMid")
-                                    sdp_mline_index = cand_data.get("sdpMLineIndex")
-                                else:
-                                    cand_str = str(cand_data)
-                                    sdp_mid = None
-                                    sdp_mline_index = None
+                elif msg_type == "candidate":
+                    viewer_id = data.get("viewerId")
+                    if viewer_id in peers:
+                        pc = peers[viewer_id]
+                        cand_data = data.get("candidate")
+                        if cand_data and pc.remoteDescription is not None:
+                            if isinstance(cand_data, dict):
+                                cand_str = cand_data.get("candidate", "")
+                                sdp_mid = cand_data.get("sdpMid", "0")
+                                sdp_mline_index = cand_data.get("sdpMLineIndex", 0)
+                            else:
+                                cand_str = str(cand_data)
+                                sdp_mid = "0"
+                                sdp_mline_index = 0
 
-                                if cand_str:
-                                    parts = cand_str.replace("candidate:", "").split()
-                                    if len(parts) >= 8:
-                                        candidate_obj = RTCIceCandidate(
-                                            component=int(parts[1]),
-                                            foundation=parts[0],
-                                            ip=parts[4],
-                                            port=int(parts[5]),
-                                            priority=int(parts[3]),
-                                            protocol=parts[2],
-                                            type=parts[7],
-                                            sdpMid=sdp_mid,
-                                            sdpMLineIndex=sdp_mline_index,
-                                        )
-                                        await pc.addIceCandidate(candidate_obj)
+                            if cand_str:
+                                parts = cand_str.replace("candidate:", "").split()
+                                if len(parts) >= 8:
+                                    candidate_obj = RTCIceCandidate(
+                                        component=int(parts[1]),
+                                        foundation=parts[0],
+                                        ip=parts[4],
+                                        port=int(parts[5]),
+                                        priority=int(parts[3]),
+                                        protocol=parts[2],
+                                        type=parts[7],
+                                        sdpMid=sdp_mid,
+                                        sdpMLineIndex=sdp_mline_index,
+                                    )
+                                    await pc.addIceCandidate(candidate_obj)
 
-                    elif msg_type == "input_event":
-                        key_code = data.get("code")
-                        action = data.get("action")
-                        input_queue.put((key_code, action))
+                elif msg_type == "input_event":
+                    key_code = data.get("code")
+                    action = data.get("action")
+                    input_queue.put((key_code, action))
 
-                except Exception as e:
-                    print(f"Message handling exception: {e}")
+            except Exception as e:
+                print(f"Message handling exception: {e}")
 
     except (websockets.exceptions.ConnectionClosedError, ConnectionResetError) as e:
-        print(f"[WebSocket] Peer dropped connection: {e}. Reconnecting in 3 seconds...")
+        print(f"[Production Connection] Disconnected: {e}. Reconnecting in 3 seconds...")
         for vid, pc in list(peers.items()):
             await pc.close()
         peers.clear()
@@ -572,15 +475,10 @@ async def async_main():
         await connect_and_listen()
 
 if __name__ == "__main__":
-    try:
-        loop = asyncio.new_event_loop()
-        t = threading.Thread(target=run_asyncio_loop, args=(loop,), daemon=True)
-        t.start()
+    loop = asyncio.new_event_loop()
+    t = threading.Thread(target=run_asyncio_loop, args=(loop,), daemon=True)
+    t.start()
 
-        root = tk.Tk()
-        app = AppSelectorGUI(root)
-        root.mainloop()
-    finally:
-        if 'cloudflared_process' in locals() and cloudflared_process.poll() is None:
-            print("[Cloudflare Automator] Cleaning up cloudflared subprocess...")
-            cloudflared_process.terminate()
+    root = tk.Tk()
+    app = AppSelectorGUI(root)
+    root.mainloop()
