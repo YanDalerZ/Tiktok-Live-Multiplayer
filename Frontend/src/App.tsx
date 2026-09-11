@@ -335,8 +335,21 @@ export default function App() {
   useEffect(() => {
     const handleMove = (e: MouseEvent | TouchEvent) => {
       if (!isDraggingJoystick.current) return;
-      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+      if (e.cancelable) e.preventDefault();
+
+      let clientX = 0;
+      let clientY = 0;
+
+      if ('touches' in e && e.touches.length > 0) {
+        clientX = e.touches[0].clientX;
+        clientY = e.touches[0].clientY;
+      } else if ('clientX' in e) {
+        clientX = e.clientX;
+        clientY = e.clientY;
+      } else {
+        return;
+      }
+
       updateJoystickPosition(clientX, clientY);
     };
 
@@ -547,8 +560,15 @@ export default function App() {
                 <div
                   ref={joystickBaseRef}
                   style={{ touchAction: 'none' }}
-                  onMouseDown={(e) => handleJoystickStart(e.clientX, e.clientY)}
-                  onTouchStart={(e) => handleJoystickStart(e.touches[0].clientX, e.touches[0].clientY)}
+                  onContextMenu={(e) => e.preventDefault()}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    handleJoystickStart(e.clientX, e.clientY);
+                  }}
+                  onTouchStart={(e) => {
+                    if (e.cancelable) e.preventDefault();
+                    handleJoystickStart(e.touches[0].clientX, e.touches[0].clientY);
+                  }}
                   className="relative w-28 h-28 sm:w-32 sm:h-32 bg-[#111] rounded-full border-4 border-[#333] flex items-center justify-center shadow-inner cursor-grab active:cursor-grabbing select-none"
                 >
                   {/* Gate Markings */}
