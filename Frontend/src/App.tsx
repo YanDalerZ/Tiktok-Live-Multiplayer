@@ -1,12 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-if (typeof document !== 'undefined' && !document.getElementById('tailwind-cdn')) {
-  const script = document.createElement('script');
-  script.id = 'tailwind-cdn';
-  script.src = 'https://cdn.tailwindcss.com';
-  document.head.appendChild(script);
-}
-
 const getSignalingUrl = () => {
   if (typeof window !== 'undefined') {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
