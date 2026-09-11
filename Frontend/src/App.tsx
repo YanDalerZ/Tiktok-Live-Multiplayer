@@ -32,6 +32,8 @@ interface QueuePlayerInfo {
   playerName: string;
 }
 
+type DPadMode = 'buttons' | 'joystick' | 'both';
+
 export default function App() {
   const [playerName, setPlayerName] = useState('');
   const [inQueue, setInQueue] = useState(false);
@@ -43,10 +45,18 @@ export default function App() {
   const [queueList, setQueueList] = useState<QueuePlayerInfo[]>([]);
   const [timeLeft, setTimeLeft] = useState<number>(120);
 
+  // Layout mode state for movement controls
+  const [dPadMode, setDPadMode] = useState<DPadMode>('buttons');
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const pressedKeys = useRef<Set<string>>(new Set());
+
+  // Joystick state tracking
+  const joystickBaseRef = useRef<HTMLDivElement | null>(null);
+  const [joystickPos, setJoystickPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const isDraggingJoystick = useRef(false);
 
   const sendInput = useCallback((code: string, action: 'keydown' | 'keyup') => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -201,21 +211,155 @@ export default function App() {
     }
   };
 
-  const handleTouchStart = (code: string) => (e: React.TouchEvent | React.MouseEvent) => {
-    e.preventDefault();
+  const handlePressStart = useCallback((code: string) => {
     if (!isCurrentPlayer) return;
     if (!pressedKeys.current.has(code)) {
       pressedKeys.current.add(code);
       sendInput(code, 'keydown');
     }
+  }, [isCurrentPlayer, sendInput]);
+
+  const handlePressEnd = useCallback((code: string) => {
+    if (!isCurrentPlayer) return;
+    if (pressedKeys.current.has(code)) {
+      pressedKeys.current.delete(code);
+      sendInput(code, 'keyup');
+    }
+  }, [isCurrentPlayer, sendInput]);
+
+  const createInputHandlers = useCallback((code: string) => {
+    return {
+      onTouchStart: (e: React.TouchEvent) => {
+        e.preventDefault();
+        handlePressStart(code);
+      },
+      onTouchEnd: (e: React.TouchEvent) => {
+        e.preventDefault();
+        handlePressEnd(code);
+      },
+      onMouseDown: (e: React.MouseEvent) => {
+        if ('ontouchstart' in window) return;
+        e.preventDefault();
+        handlePressStart(code);
+      },
+      onMouseUp: (e: React.MouseEvent) => {
+        if ('ontouchstart' in window) return;
+        e.preventDefault();
+        handlePressEnd(code);
+      },
+      onMouseLeave: (e: React.MouseEvent) => {
+        if ('ontouchstart' in window) return;
+        e.preventDefault();
+        handlePressEnd(code);
+      }
+    };
+  }, [handlePressStart, handlePressEnd]);
+
+  // Joystick math & event handlers
+  const updateJoystickPosition = useCallback((clientX: number, clientY: number) => {
+    if (!joystickBaseRef.current || !isCurrentPlayer) return;
+
+    const rect = joystickBaseRef.current.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    const deltaX = clientX - centerX;
+    const deltaY = clientY - centerY;
+    const distance = Math.hypot(deltaX, deltaY);
+
+    const maxRadius = rect.width / 2 - 10;
+    const clampedDistance = Math.min(distance, maxRadius);
+    const angle = Math.atan2(deltaY, deltaX);
+
+    const knobX = Math.cos(angle) * clampedDistance;
+    const knobY = Math.sin(angle) * clampedDistance;
+
+    setJoystickPos({ x: knobX, y: knobY });
+
+    // Threshold angle checks to send WASD inputs based on stick direction
+    const threshold = 12; // Deadzone threshold in pixels
+    const activeDirections = {
+      KeyW: false,
+      KeyS: false,
+      KeyA: false,
+      KeyD: false
+    };
+
+    if (clampedDistance > threshold) {
+      const deg = (angle * 180) / Math.PI;
+
+      // Up (KeyW)
+      if (deg > -135 && deg < -45) activeDirections.KeyW = true;
+      // Down (KeyS)
+      if (deg > 45 && deg < 135) activeDirections.KeyS = true;
+      // Left (KeyA)
+      if (deg > 135 || deg < -135) activeDirections.KeyA = true;
+      // Right (KeyD)
+      if (deg > -45 && deg < 45) activeDirections.KeyD = true;
+    }
+
+    // Trigger key events for state changes
+    (['KeyW', 'KeyS', 'KeyA', 'KeyD'] as const).forEach((code) => {
+      if (activeDirections[code]) {
+        if (!pressedKeys.current.has(code)) {
+          pressedKeys.current.add(code);
+          sendInput(code, 'keydown');
+        }
+      } else {
+        if (pressedKeys.current.has(code)) {
+          pressedKeys.current.delete(code);
+          sendInput(code, 'keyup');
+        }
+      }
+    });
+  }, [isCurrentPlayer, sendInput]);
+
+  const resetJoystick = useCallback(() => {
+    isDraggingJoystick.current = false;
+    setJoystickPos({ x: 0, y: 0 });
+
+    (['KeyW', 'KeyS', 'KeyA', 'KeyD'] as const).forEach((code) => {
+      if (pressedKeys.current.has(code)) {
+        pressedKeys.current.delete(code);
+        sendInput(code, 'keyup');
+      }
+    });
+  }, [sendInput]);
+
+  const handleJoystickStart = (clientX: number, clientY: number) => {
+    if (!isCurrentPlayer) return;
+    isDraggingJoystick.current = true;
+    updateJoystickPosition(clientX, clientY);
   };
 
-  const handleTouchEnd = (code: string) => (e: React.TouchEvent | React.MouseEvent) => {
-    e.preventDefault();
-    if (!isCurrentPlayer) return;
-    pressedKeys.current.delete(code);
-    sendInput(code, 'keyup');
-  };
+  useEffect(() => {
+    const handleMove = (e: MouseEvent | TouchEvent) => {
+      if (!isDraggingJoystick.current) return;
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+      updateJoystickPosition(clientX, clientY);
+    };
+
+    const handleEnd = () => {
+      if (isDraggingJoystick.current) {
+        resetJoystick();
+      }
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    window.addEventListener('touchmove', handleMove, { passive: false });
+    window.addEventListener('touchend', handleEnd);
+    window.addEventListener('touchcancel', handleEnd);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleEnd);
+      window.removeEventListener('touchmove', handleMove);
+      window.removeEventListener('touchend', handleEnd);
+      window.removeEventListener('touchcancel', handleEnd);
+    };
+  }, [updateJoystickPosition, resetJoystick]);
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -228,7 +372,7 @@ export default function App() {
       {/* Marquee Header */}
       <div className="w-full max-w-4xl bg-gradient-to-b from-[#e60000] to-[#800000] border-2 sm:border-3 border-[#ffcc00] rounded-lg sm:rounded-xl p-1.5 sm:p-2 text-center shadow-[0_0_15px_#ff0000] shrink-0">
         <h1 className="m-0 text-base sm:text-2xl font-black tracking-widest text-white drop-shadow-[2px_2px_0_#000]">
-          TEKKEN 7 ARCADE
+          TEKKEN 7 ARCADE TIKTOK LIVE MULTIPLAYER
         </h1>
         <div className="text-[10px] sm:text-xs text-[#ffcc00] font-bold mt-0.5 tracking-wider uppercase">
           {status}
@@ -330,55 +474,102 @@ export default function App() {
 
       {/* Control Deck */}
       <div className="w-full max-w-4xl bg-[#18181c] border-2 sm:border-3 border-[#333] rounded-xl sm:rounded-2xl p-2 sm:p-3 flex flex-col gap-2 shrink-0 shadow-2xl my-2">
-        <div className="flex flex-row justify-between items-center w-full px-2 sm:px-6">
-          {/* D-Pad Controls */}
-          <div className="flex flex-col items-center gap-1">
+        {/* Movement Mode Toggle */}
+        <div className="flex justify-center items-center gap-2 pb-1 border-b border-[#222]">
+          <span className="text-[10px] sm:text-xs text-[#888] uppercase font-bold">STICK MODE:</span>
+          <div className="flex bg-[#0d0d10] p-0.5 rounded-lg border border-[#333]">
             <button
-              style={{ touchAction: 'manipulation' }}
-              onTouchStart={handleTouchStart('KeyW')}
-              onTouchEnd={handleTouchEnd('KeyW')}
-              onMouseDown={handleTouchStart('KeyW')}
-              onMouseUp={handleTouchEnd('KeyW')}
-              onMouseLeave={handleTouchEnd('KeyW')}
-              className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555]"
+              onClick={() => setDPadMode('buttons')}
+              className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase cursor-pointer transition-colors ${dPadMode === 'buttons' ? 'bg-[#00ffcc] text-black' : 'text-[#888] hover:text-white'
+                }`}
             >
-              W
+              WASD
             </button>
-            <div className="flex gap-1">
-              <button
-                style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyA')}
-                onTouchEnd={handleTouchEnd('KeyA')}
-                onMouseDown={handleTouchStart('KeyA')}
-                onMouseUp={handleTouchEnd('KeyA')}
-                onMouseLeave={handleTouchEnd('KeyA')}
-                className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555]"
-              >
-                A
-              </button>
-              <button
-                style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyS')}
-                onTouchEnd={handleTouchEnd('KeyS')}
-                onMouseDown={handleTouchStart('KeyS')}
-                onMouseUp={handleTouchEnd('KeyS')}
-                onMouseLeave={handleTouchEnd('KeyS')}
-                className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555]"
-              >
-                S
-              </button>
-              <button
-                style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyD')}
-                onTouchEnd={handleTouchEnd('KeyD')}
-                onMouseDown={handleTouchStart('KeyD')}
-                onMouseUp={handleTouchEnd('KeyD')}
-                onMouseLeave={handleTouchEnd('KeyD')}
-                className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555]"
-              >
-                D
-              </button>
-            </div>
+            <button
+              onClick={() => setDPadMode('joystick')}
+              className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase cursor-pointer transition-colors ${dPadMode === 'joystick' ? 'bg-[#00ffcc] text-black' : 'text-[#888] hover:text-white'
+                }`}
+            >
+              JOYSTICK
+            </button>
+            <button
+              onClick={() => setDPadMode('both')}
+              className={`px-2 py-0.5 text-[10px] font-bold rounded uppercase cursor-pointer transition-colors ${dPadMode === 'both' ? 'bg-[#00ffcc] text-black' : 'text-[#888] hover:text-white'
+                }`}
+            >
+              BOTH
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-row justify-between items-center w-full px-2 sm:px-6 gap-2">
+          {/* Movement Section */}
+          <div className="flex items-center gap-3">
+            {/* D-Pad Buttons */}
+            {(dPadMode === 'buttons' || dPadMode === 'both') && (
+              <div className="flex flex-col items-center gap-1">
+                <button
+                  style={{ touchAction: 'manipulation' }}
+                  {...createInputHandlers('KeyW')}
+                  className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555] select-none"
+                >
+                  W
+                </button>
+                <div className="flex gap-1">
+                  <button
+                    style={{ touchAction: 'manipulation' }}
+                    {...createInputHandlers('KeyA')}
+                    className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555] select-none"
+                  >
+                    A
+                  </button>
+                  <button
+                    style={{ touchAction: 'manipulation' }}
+                    {...createInputHandlers('KeyS')}
+                    className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555] select-none"
+                  >
+                    S
+                  </button>
+                  <button
+                    style={{ touchAction: 'manipulation' }}
+                    {...createInputHandlers('KeyD')}
+                    className="w-10 h-10 sm:w-12 sm:h-12 bg-[#333] rounded-lg border-2 border-white font-bold text-sm text-white shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer active:bg-[#555] select-none"
+                  >
+                    D
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Virtual Joystick */}
+            {(dPadMode === 'joystick' || dPadMode === 'both') && (
+              <div className="flex flex-col items-center">
+                <div
+                  ref={joystickBaseRef}
+                  style={{ touchAction: 'none' }}
+                  onMouseDown={(e) => handleJoystickStart(e.clientX, e.clientY)}
+                  onTouchStart={(e) => handleJoystickStart(e.touches[0].clientX, e.touches[0].clientY)}
+                  className="relative w-28 h-28 sm:w-32 sm:h-32 bg-[#111] rounded-full border-4 border-[#333] flex items-center justify-center shadow-inner cursor-grab active:cursor-grabbing select-none"
+                >
+                  {/* Gate Markings */}
+                  <div className="absolute inset-2 border border-dashed border-[#222] rounded-full pointer-events-none" />
+                  <span className="absolute top-1 text-[9px] text-[#444] font-bold pointer-events-none">W</span>
+                  <span className="absolute bottom-1 text-[9px] text-[#444] font-bold pointer-events-none">S</span>
+                  <span className="absolute left-1 text-[9px] text-[#444] font-bold pointer-events-none">A</span>
+                  <span className="absolute right-1 text-[9px] text-[#444] font-bold pointer-events-none">D</span>
+
+                  {/* Joystick Shaft & Balltop Stick Handle */}
+                  <div
+                    className="absolute w-12 h-12 sm:w-14 sm:h-14 bg-gradient-to-tr from-[#cc0000] via-[#ff3333] to-[#ff9999] rounded-full border-2 border-white shadow-[0_4px_10px_rgba(0,0,0,0.8)] flex items-center justify-center transition-transform duration-75 ease-out pointer-events-none"
+                    style={{
+                      transform: `translate(${joystickPos.x}px, ${joystickPos.y}px)`
+                    }}
+                  >
+                    <div className="w-4 h-4 bg-white/40 rounded-full" />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Action Buttons Matrix */}
@@ -386,45 +577,29 @@ export default function App() {
             <div className="flex gap-1.5 sm:gap-2">
               <button
                 style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyU')}
-                onTouchEnd={handleTouchEnd('KeyU')}
-                onMouseDown={handleTouchStart('KeyU')}
-                onMouseUp={handleTouchEnd('KeyU')}
-                onMouseLeave={handleTouchEnd('KeyU')}
-                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#e60000] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
+                {...createInputHandlers('KeyU')}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#e60000] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer select-none"
               >
                 U
               </button>
               <button
                 style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyI')}
-                onTouchEnd={handleTouchEnd('KeyI')}
-                onMouseDown={handleTouchStart('KeyI')}
-                onMouseUp={handleTouchEnd('KeyI')}
-                onMouseLeave={handleTouchEnd('KeyI')}
-                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-black bg-[#e6b800] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
+                {...createInputHandlers('KeyI')}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-black bg-[#e6b800] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer select-none"
               >
                 I
               </button>
               <button
                 style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyO')}
-                onTouchEnd={handleTouchEnd('KeyO')}
-                onMouseDown={handleTouchStart('KeyO')}
-                onMouseUp={handleTouchEnd('KeyO')}
-                onMouseLeave={handleTouchEnd('KeyO')}
-                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#0066cc] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
+                {...createInputHandlers('KeyO')}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#0066cc] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer select-none"
               >
                 O
               </button>
               <button
                 style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyP')}
-                onTouchEnd={handleTouchEnd('KeyP')}
-                onMouseDown={handleTouchStart('KeyP')}
-                onMouseUp={handleTouchEnd('KeyP')}
-                onMouseLeave={handleTouchEnd('KeyP')}
-                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#6600cc] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
+                {...createInputHandlers('KeyP')}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#6600cc] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer select-none"
               >
                 P
               </button>
@@ -432,45 +607,29 @@ export default function App() {
             <div className="flex gap-1.5 sm:gap-2">
               <button
                 style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyJ')}
-                onTouchEnd={handleTouchEnd('KeyJ')}
-                onMouseDown={handleTouchStart('KeyJ')}
-                onMouseUp={handleTouchEnd('KeyJ')}
-                onMouseLeave={handleTouchEnd('KeyJ')}
-                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#009933] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
+                {...createInputHandlers('KeyJ')}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#009933] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer select-none"
               >
                 J
               </button>
               <button
                 style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyK')}
-                onTouchEnd={handleTouchEnd('KeyK')}
-                onMouseDown={handleTouchStart('KeyK')}
-                onMouseUp={handleTouchEnd('KeyK')}
-                onMouseLeave={handleTouchEnd('KeyK')}
-                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#cc0088] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
+                {...createInputHandlers('KeyK')}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#cc0088] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer select-none"
               >
                 K
               </button>
               <button
                 style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('KeyL')}
-                onTouchEnd={handleTouchEnd('KeyL')}
-                onMouseDown={handleTouchStart('KeyL')}
-                onMouseUp={handleTouchEnd('KeyL')}
-                onMouseLeave={handleTouchEnd('KeyL')}
-                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#ff6600] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
+                {...createInputHandlers('KeyL')}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#ff6600] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer select-none"
               >
                 L
               </button>
               <button
                 style={{ touchAction: 'manipulation' }}
-                onTouchStart={handleTouchStart('Semicolon')}
-                onTouchEnd={handleTouchEnd('Semicolon')}
-                onMouseDown={handleTouchStart('Semicolon')}
-                onMouseUp={handleTouchEnd('Semicolon')}
-                onMouseLeave={handleTouchEnd('Semicolon')}
-                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#009999] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer"
+                {...createInputHandlers('Semicolon')}
+                className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-white font-bold text-sm text-white bg-[#009999] shadow-[0_4px_0_rgba(0,0,0,0.5)] active:translate-y-1 active:shadow-none flex items-center justify-center cursor-pointer select-none"
               >
                 ;
               </button>
@@ -482,45 +641,29 @@ export default function App() {
         <div className="flex justify-center flex-wrap gap-2 pt-1 border-t border-dashed border-[#333]">
           <button
             style={{ touchAction: 'manipulation' }}
-            onTouchStart={handleTouchStart('KeyV')}
-            onTouchEnd={handleTouchEnd('KeyV')}
-            onMouseDown={handleTouchStart('KeyV')}
-            onMouseUp={handleTouchEnd('KeyV')}
-            onMouseLeave={handleTouchEnd('KeyV')}
-            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none"
+            {...createInputHandlers('KeyV')}
+            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none select-none"
           >
-            V (VIEW)
+            V (SELECT)
           </button>
           <button
             style={{ touchAction: 'manipulation' }}
-            onTouchStart={handleTouchStart('KeyB')}
-            onTouchEnd={handleTouchEnd('KeyB')}
-            onMouseDown={handleTouchStart('KeyB')}
-            onMouseUp={handleTouchEnd('KeyB')}
-            onMouseLeave={handleTouchEnd('KeyB')}
-            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none"
+            {...createInputHandlers('KeyB')}
+            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none select-none"
           >
-            B (MENU)
+            B (START)
           </button>
           <button
             style={{ touchAction: 'manipulation' }}
-            onTouchStart={handleTouchStart('KeyC')}
-            onTouchEnd={handleTouchEnd('KeyC')}
-            onMouseDown={handleTouchStart('KeyC')}
-            onMouseUp={handleTouchEnd('KeyC')}
-            onMouseLeave={handleTouchEnd('KeyC')}
-            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none"
+            {...createInputHandlers('KeyC')}
+            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none select-none"
           >
             C (L3)
           </button>
           <button
             style={{ touchAction: 'manipulation' }}
-            onTouchStart={handleTouchStart('KeyN')}
-            onTouchEnd={handleTouchEnd('KeyN')}
-            onMouseDown={handleTouchStart('KeyN')}
-            onMouseUp={handleTouchEnd('KeyN')}
-            onMouseLeave={handleTouchEnd('KeyN')}
-            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none"
+            {...createInputHandlers('KeyN')}
+            className="px-2.5 py-1 bg-[#2b2b2b] text-[#ccc] border border-[#555] rounded-full text-[10px] sm:text-xs font-bold cursor-pointer shadow-[0_2px_0_#111] active:translate-y-0.5 active:shadow-none select-none"
           >
             N (R3)
           </button>
